@@ -35,8 +35,15 @@ chmod +x 3rdparty/scripts/*.sh
 
 ```bash
 ./3rdparty/scripts/fetch_sources.sh               # 若还没有 src
-./3rdparty/scripts/build_linux_static.sh          # → install/linux_aarch64
+./3rdparty/scripts/build_linux_static.sh          # → install/linux_aarch64（必须带 -fPIC）
+# 确认存在：
+ls 3rdparty/install/linux_aarch64/lib/libtiff.a
+
+rm -rf build
 cmake -S . -B build -DRCS_ENABLE_MOSAIC=ON -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF
 cmake --build build -j
 ./sdk/pack_sdk.sh
 ```
+
+> 若链接报 `recompile with -fPIC`，说明误用了系统 `/usr/lib/.../libtiff.a`。  
+> 删掉 `build`，先跑通 `build_linux_static.sh`，再 cmake（配置日志应出现 `Using bundled static libtiff`）。

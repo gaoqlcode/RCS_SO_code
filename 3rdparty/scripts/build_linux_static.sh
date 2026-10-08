@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# 编译 Linux 静态 zlib + libtiff，打进 librcs_proc 后客户无需 apt 装 libtiff
+# 编译 Linux 静态 zlib + libtiff（带 -fPIC），打进 librcs_proc 后客户无需 apt 装 libtiff
 # 用法:
 #   ./build_linux_static.sh                 # 本机架构 (x86_64 / aarch64)
 #   ./build_linux_static.sh aarch64         # 交叉到 aarch64（需 aarch64-linux-gnu-g++）
-#   RCS_3P_SRC=/path/to/src ./build_linux_static.sh aarch64
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${RCS_3P_SRC:-$ROOT/src}"
@@ -27,12 +26,10 @@ esac
 BUILD="$ROOT/build/linux_${TARGET_ARCH}"
 INST="$ROOT/install/linux_${TARGET_ARCH}"
 
-# 源码旁路
 if [[ ! -f "$SRC/zlib-1.3.1/CMakeLists.txt" ]]; then
   for cand in \
     "$ROOT/../../207_RCS_code/3rdparty/src" \
-    "/mnt/e/project/SAR-RCS/207_RCS/207_RCS_code/3rdparty/src" \
-    "/home/gaoql/RCS/207_RCS_code/3rdparty/src"
+    "/mnt/e/project/SAR-RCS/207_RCS/207_RCS_code/3rdparty/src"
   do
     if [[ -f "$cand/zlib-1.3.1/CMakeLists.txt" ]]; then
       SRC="$cand"
@@ -41,39 +38,25 @@ if [[ ! -f "$SRC/zlib-1.3.1/CMakeLists.txt" ]]; then
   done
 fi
 
-if [[ ! -f "$SRC/zlib-1.3.1/CMakeLists.txt" ]]; then
-  echo "找不到 zlib 源码: $SRC/zlib-1.3.1" >&2
-  echo "任选其一：" >&2
-  echo "  1) 联网下载: ./3rdparty/scripts/fetch_sources.sh" >&2
-  echo "  2) 从 207_RCS_code/3rdparty/src 拷贝 zlib-1.3.1 与 tiff-4.6.0 到本工程 3rdparty/src/" >&2
-  echo "  3) RCS_3P_SRC=/含上述目录的路径 ./3rdparty/scripts/build_linux_static.sh" >&2
+if [[ ! -f "$SRC/zlib-1.3.1/CMakeLists.txt" || ! -f "$SRC/tiff-4.6.0/CMakeLists.txt" ]]; then
+  echo "缺少源码。请先: ./3rdparty/scripts/fetch_sources.sh" >&2
+  echo "需要: $SRC/zlib-1.3.1  与  $SRC/tiff-4.6.0" >&2
   exit 1
 fi
 
 CMAKE_EXTRA=()
 if [[ "$TARGET_ARCH" != "$HOST_ARCH" ]]; then
-  # 交叉编译
   case "$TARGET_ARCH" in
     aarch64)
       PROJ="$(cd "$ROOT/.." && pwd)"
       TC="${RCS_CMAKE_TOOLCHAIN:-$PROJ/cmake/toolchain-aarch64-linux-gnu.cmake}"
-      if [[ ! -f "$TC" ]]; then
-        echo "缺少工具链文件: $TC" >&2
-        exit 1
-      fi
-      if ! command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
-        echo "未找到 aarch64-linux-gnu-g++，请先: sudo apt install g++-aarch64-linux-gnu" >&2
-        exit 1
-      fi
+      [[ -f "$TC" ]] || { echo "缺少 $TC" >&2; exit 1; }
+      command -v aarch64-linux-gnu-g++ >/dev/null || {
+        echo "请先: sudo apt install g++-aarch64-linux-gnu" >&2; exit 1; }
       CMAKE_EXTRA+=(-DCMAKE_TOOLCHAIN_FILE="$TC")
       ;;
-    armv7l)
-      echo "armv7l 交叉请自备工具链并设 RCS_CMAKE_TOOLCHAIN" >&2
-      if [[ -z "${RCS_CMAKE_TOOLCHAIN:-}" ]]; then exit 1; fi
-      CMAKE_EXTRA+=(-DCMAKE_TOOLCHAIN_FILE="$RCS_CMAKE_TOOLCHAIN")
-      ;;
     *)
-      echo "本机是 $HOST_ARCH，无法交叉到 $TARGET_ARCH（请在目标机本机编译）" >&2
+      echo "交叉到 $TARGET_ARCH 请设 RCS_CMAKE_TOOLCHAIN" >&2
       exit 1
       ;;
   esac
@@ -83,6 +66,12 @@ echo "HOST=$HOST_ARCH  TARGET=$TARGET_ARCH"
 echo "SRC = $SRC"
 echo "INST= $INST"
 mkdir -p "$INST"
+
+# 若上次只编了 zlib、没有 libtiff.a，清掉 tiff 构建缓存再来
+if [[ ! -f "$INST/lib/libtiff.a" ]]; then
+  echo "未找到 $INST/lib/libtiff.a ，将重新编译 libtiff…"
+  rm -rf "$BUILD/tiff"
+fi
 
 echo "=== zlib (static, PIC) ==="
 cmake -S "$SRC/zlib-1.3.1" -B "$BUILD/zlib" \
@@ -94,8 +83,15 @@ cmake -S "$SRC/zlib-1.3.1" -B "$BUILD/zlib" \
 cmake --build "$BUILD/zlib" -j"$(nproc)"
 cmake --install "$BUILD/zlib"
 
-ZLIB_A="$INST/lib/libz.a"
-[[ -f "$ZLIB_A" ]] || ZLIB_A="$INST/lib/libzlibstatic.a"
+ZLIB_A=""
+for cand in "$INST/lib/libz.a" "$INST/lib64/libz.a" "$INST/lib/libzlibstatic.a"; do
+  if [[ -f "$cand" ]]; then ZLIB_A="$cand"; break; fi
+done
+if [[ -z "$ZLIB_A" ]]; then
+  echo "zlib 安装失败，找不到 libz.a" >&2
+  exit 1
+fi
+echo "ZLIB_A=$ZLIB_A"
 
 echo "=== libtiff (static, PIC, zlib only) ==="
 cmake -S "$SRC/tiff-4.6.0" -B "$BUILD/tiff" \
@@ -112,7 +108,44 @@ cmake -S "$SRC/tiff-4.6.0" -B "$BUILD/tiff" \
 cmake --build "$BUILD/tiff" --target tiff -j"$(nproc)"
 cmake --install "$BUILD/tiff"
 
+# 有的环境 install 到 lib64；或只编出在 build 树里
+TIFF_A=""
+for cand in \
+  "$INST/lib/libtiff.a" \
+  "$INST/lib64/libtiff.a" \
+  "$BUILD/tiff/libtiff/libtiff.a" \
+  "$BUILD/tiff/lib/libtiff.a"
+do
+  if [[ -f "$cand" ]]; then TIFF_A="$cand"; break; fi
+done
+
+if [[ -z "$TIFF_A" ]]; then
+  echo "libtiff 编译/安装失败：找不到 libtiff.a" >&2
+  echo "请把上面 cmake/build 的报错完整贴出。" >&2
+  find "$BUILD/tiff" -name 'libtiff.a' 2>/dev/null | head || true
+  exit 1
+fi
+
+mkdir -p "$INST/lib" "$INST/include"
+if [[ "$TIFF_A" != "$INST/lib/libtiff.a" ]]; then
+  cp -a "$TIFF_A" "$INST/lib/libtiff.a"
+  echo "已复制 libtiff.a → $INST/lib/libtiff.a"
+fi
+# 头文件
+for h in tiff.h tiffio.h tiffvers.h tiffconf.h; do
+  if [[ ! -f "$INST/include/$h" ]]; then
+    find "$BUILD/tiff" "$SRC/tiff-4.6.0" -name "$h" 2>/dev/null | head -1 | while read -r p; do
+      cp -a "$p" "$INST/include/"
+    done
+  fi
+done
+
 echo
 echo "完成: $INST"
-file "$INST/lib/libtiff.a" 2>/dev/null || true
-ls -la "$INST/lib"/libtiff.a "$INST/lib"/libz.a "$INST/include"/tiffio.h 2>/dev/null || true
+ls -la "$INST/lib/libtiff.a" "$INST/lib/libz.a" "$INST/include/tiffio.h"
+file "$INST/lib/libtiff.a"
+echo
+echo "下一步:"
+echo "  rm -rf ../../build   # 或工程根目录的 build"
+echo "  cd ../.. && cmake -S . -B build -DRCS_ENABLE_MOSAIC=ON -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF"
+echo "  cmake --build build -j && ./sdk/pack_sdk.sh"

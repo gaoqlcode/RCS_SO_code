@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-// 处理链路里用到的数据结构（纯 C++，不绑 Qt）
+// 请求 / 响应 / 选点结构。界面侧自己做控件，把结果填进这些结构再调库。
 
 struct FileHeaderInfo {
     uint16_t flag;
@@ -30,8 +30,8 @@ struct FileHeaderInfo {
 
     FileHeaderInfo()
         : flag(0), lenFileH(512), lenFrmH(256), devId(0), workMode(0), waveform(0), bandCode(0),
-          fcGHz(0), fStartG(0), fStopG(0), fStepMHz(0), bwMHz(0), polComb(0),
-          year(0), month(0), day(0), hour(0), minute(0), second(0), msec(0)
+          fcGHz(0), fStartG(0), fStopG(0), fStepMHz(0), bwMHz(0), polComb(0), year(0), month(0),
+          day(0), hour(0), minute(0), second(0), msec(0)
     {
     }
 };
@@ -45,8 +45,7 @@ struct FrameMeta {
     uint16_t azRaw;
     int16_t rollRaw;
 
-    FrameMeta()
-        : N(0), PRT(0), tauN(0), dlyN(0), azRaw(0), rollRaw(0)
+    FrameMeta() : N(0), PRT(0), tauN(0), dlyN(0), azRaw(0), rollRaw(0)
     {
         sync[0] = sync[1] = sync[2] = sync[3] = 0;
     }
@@ -90,7 +89,6 @@ struct InteractPick {
     InteractPick(int a, int r) : az(a), rg(r) {}
 };
 
-// 人机交互选点结果（库侧）；和界面里的 Qt UserSelection 分开，避免重名
 struct InteractSelection {
     std::vector<InteractPick> corners;
     std::vector<InteractPick> targets;
@@ -128,7 +126,7 @@ struct HrrpResponse {
     std::vector<double> rangeM;
     std::vector<double> rcsDbsm;
     std::vector<double> phaseDeg;
-    std::string l1Path; // 1 级 .dat
+    std::string l1Path;
     std::string pdatPath;
     std::string hrrpPath;
     std::string timeSpanTag;
@@ -174,7 +172,6 @@ struct RcsResponse {
     std::string timeSpanTag;
 };
 
-// 点频 RCS：一文件一频点，输出 RCS–频率曲线
 struct CwRcsRequest {
     std::string dataFolder;
     std::string pol;
@@ -193,35 +190,10 @@ struct CwRcsRequest {
 struct CwRcsResponse {
     std::vector<double> freqGHz;
     std::vector<double> rcsDbsm;
-    std::string l3Path; // .rcs
+    std::string l3Path;
     std::string timeSpanTag;
     std::vector<std::string> l1Paths;
     std::vector<std::string> l2Paths;
-};
-
-struct MosaicRequest {
-    std::string inFolder;
-    std::string outFolder;
-    bool doFlatten;
-    double medOut;
-    int mode; // 0 自动配准  1 使用 offR/offC
-    std::vector<int> offR;
-    std::vector<int> offC;
-    int rawNrHint;
-    int rawNaHint;
-
-    MosaicRequest()
-        : doFlatten(true), medOut(0.35), mode(0), rawNrHint(0), rawNaHint(0)
-    {
-    }
-};
-
-struct MosaicResponse {
-    std::string mosaicTif;
-    std::string offsetsCsv;
-    std::string flattenTif;
-    std::string displayTif;
-    std::vector<int> seamCols;
 };
 
 #endif

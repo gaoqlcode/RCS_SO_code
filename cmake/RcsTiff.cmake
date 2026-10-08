@@ -1,11 +1,12 @@
-# 解析 libtiff：优先「当前目标架构」的工程内静态库（编进 librcs_proc），否则系统库
-# 注意：禁止把 x86_64 的 .a 链进 aarch64 目标（或反过来）
+# 解析 libtiff：优先「当前目标架构」的工程内静态库（须带 -fPIC，才能打进 .so）
+# 禁止使用系统 /usr/lib/.../libtiff.a：发行版静态库通常无 PIC，链进 librcs_proc.so 会报
+#   relocation R_AARCH64_* ... recompile with -fPIC
 
 set(RCS_TIFF_OK FALSE)
 set(RCS_TIFF_STATIC FALSE)
 unset(RCS_TIFF_SOURCE)
 
-option(RCS_TIFF_PREFER_STATIC "Prefer static libtiff linked into librcs_proc" ON)
+option(RCS_TIFF_PREFER_STATIC "Prefer bundled static libtiff linked into librcs_proc" ON)
 
 # 归一化架构目录名
 set(_rcs_proc "${CMAKE_SYSTEM_PROCESSOR}")
@@ -20,7 +21,7 @@ else()
   set(_rcs_linux_arch "${_rcs_proc}")
 endif()
 
-# ---- 1) 工程自带静态库（与目标架构一致）----
+# ---- 1) 工程自带静态库（build_linux_static.sh 生成，带 PIC）----
 if(RCS_TIFF_PREFER_STATIC)
   set(_rcs_bundled_candidates "")
   if(WIN32 OR MINGW)
@@ -59,45 +60,45 @@ if(RCS_TIFF_PREFER_STATIC)
       break()
     endif()
   endforeach()
+
+  if(NOT RCS_TIFF_OK AND UNIX AND NOT APPLE)
+    message(FATAL_ERROR
+      "RCS_TIFF_PREFER_STATIC=ON，但没有 3rdparty/install/linux_${_rcs_linux_arch}/lib/libtiff.a\n"
+      "系统自带的 libtiff.a 通常无 -fPIC，不能打进 librcs_proc.so（正是你看到的链接错误）。\n"
+      "请先在本机生成带 PIC 的静态库：\n"
+      "  ./3rdparty/scripts/fetch_sources.sh\n"
+      "  ./3rdparty/scripts/build_linux_static.sh\n"
+      "然后删掉旧 build 再 cmake。\n"
+      "若暂时用系统动态库（客户需装 libtiff）：-DRCS_TIFF_PREFER_STATIC=OFF")
+  endif()
 endif()
 
-# ---- 2) 系统静态 .a（仅本机原生编译时可用；交叉编译勿用宿主 /usr/lib）----
-if(NOT RCS_TIFF_OK AND RCS_TIFF_PREFER_STATIC AND UNIX AND NOT APPLE
-   AND NOT CMAKE_CROSSCOMPILING)
-  find_library(RCS_SYS_TIFF_A NAMES libtiff.a
+# ---- 2) 系统动态库（客户机需有 libtiff.so）----
+if(NOT RCS_TIFF_OK)
+  # 明确找 .so，避免 FindTIFF 误选无 PIC 的 .a
+  find_library(RCS_TIFF_SO NAMES tiff libtiff.so.6 libtiff.so.5 libtiff.so
     PATHS /usr/lib/${_rcs_linux_arch}-linux-gnu /usr/lib /usr/local/lib)
-  find_path(RCS_SYS_TIFF_INC tiffio.h PATHS /usr/include /usr/local/include)
-  if(RCS_SYS_TIFF_A AND RCS_SYS_TIFF_INC)
-    set(_rcs_static_deps "${RCS_SYS_TIFF_A}")
-    foreach(_n IN ITEMS webp zstd lzma jbig jpeg z)
-      find_library(_rcs_dep_${_n} NAMES lib${_n}.a
-        PATHS /usr/lib/${_rcs_linux_arch}-linux-gnu /usr/lib /usr/local/lib)
-      if(_rcs_dep_${_n})
-        list(APPEND _rcs_static_deps "${_rcs_dep_${_n}}")
-      endif()
-    endforeach()
-    add_library(rcs_tiff INTERFACE IMPORTED GLOBAL)
+  find_path(RCS_TIFF_INC tiffio.h PATHS /usr/include /usr/local/include)
+  if(RCS_TIFF_SO AND RCS_TIFF_INC)
+    add_library(rcs_tiff SHARED IMPORTED GLOBAL)
     set_target_properties(rcs_tiff PROPERTIES
-      INTERFACE_INCLUDE_DIRECTORIES "${RCS_SYS_TIFF_INC}"
-      INTERFACE_LINK_LIBRARIES "${_rcs_static_deps};m"
+      IMPORTED_LOCATION "${RCS_TIFF_SO}"
+      INTERFACE_INCLUDE_DIRECTORIES "${RCS_TIFF_INC}"
     )
     if(NOT TARGET TIFF::TIFF)
       add_library(TIFF::TIFF ALIAS rcs_tiff)
     endif()
     set(RCS_TIFF_OK TRUE)
-    set(RCS_TIFF_STATIC TRUE)
-    set(RCS_TIFF_SOURCE "system-static")
-    message(STATUS "Using system static libtiff (embedded into librcs_proc)")
-  endif()
-endif()
-
-# ---- 3) 系统动态库 ----
-if(NOT RCS_TIFF_OK)
-  find_package(TIFF)
-  if(TIFF_FOUND)
-    set(RCS_TIFF_OK TRUE)
     set(RCS_TIFF_STATIC FALSE)
-    set(RCS_TIFF_SOURCE "system-shared")
-    message(STATUS "Using system shared libtiff (runtime needs libtiff)")
+    set(RCS_TIFF_SOURCE "system-shared:${RCS_TIFF_SO}")
+    message(STATUS "Using system shared libtiff: ${RCS_TIFF_SO}")
+  else()
+    find_package(TIFF)
+    if(TIFF_FOUND)
+      set(RCS_TIFF_OK TRUE)
+      set(RCS_TIFF_STATIC FALSE)
+      set(RCS_TIFF_SOURCE "system-shared")
+      message(STATUS "Using system libtiff via FindTIFF")
+    endif()
   endif()
 endif()

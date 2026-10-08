@@ -43,10 +43,10 @@ if(RCS_ENABLE_MOSAIC)
   include(RcsTiff)
   if(NOT RCS_TIFF_OK)
     message(FATAL_ERROR
-      "RCS_ENABLE_MOSAIC=ON 但找不到 libtiff。\n"
-      "  1) Linux: 3rdparty/scripts/build_linux_x86_64.sh 生成静态库后重配\n"
+      "RCS_ENABLE_MOSAIC=ON 但找不到可用的 libtiff。\n"
+      "  1) Linux: ./3rdparty/scripts/build_linux_static.sh 生成 3rdparty/install/linux_<架构>\n"
       "  2) Windows: 使用 3rdparty/install/mingw73_64\n"
-      "  3) 或 apt install libtiff-dev / vcpkg tiff\n"
+      "  3) 临时用系统动态库: -DRCS_TIFF_PREFER_STATIC=OFF（需 apt install libtiff5）\n"
       "  4) 或不需要拼接: -DRCS_ENABLE_MOSAIC=OFF")
   endif()
   add_compile_definitions(RCS_ENABLE_MOSAIC=1)

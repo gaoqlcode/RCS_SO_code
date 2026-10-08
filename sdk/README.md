@@ -1,60 +1,58 @@
-# RCS 处理库 SDK（交付包）
+# RCS 处理库 SDK
 
-本目录可单独拷给二次开发方使用，不必附带整份工程源码。
+给二次开发用的动态库包。界面软件由对方自己做，这里只提供算法库、头文件和说明。
 
 | 内容 | 说明 |
 |------|------|
-| `lib/` | 已编译的 `librcs_proc.so`（当前为 x86_64 Linux） |
-| `include/rcs/` | 公开 C++ 头文件 |
-| `接口使用说明.md` | 接口说明、参数、回调约定 |
-| `demo/` | 最小可编译示例 |
+| `lib/` | `librcs_proc.so` |
+| `include/rcs/` | 公开头文件（**不含**大图拼接接口） |
+| `接口使用说明.md` | 对接说明，做 UI 时先看这个 |
+| `demo/` | 命令行示例（HRRP / RCS / 点频） |
 
-## 运行依赖
+## 本包提供的业务
 
-- Linux x86_64
-- C++11 及以上编译器（`libstdc++` / `glibc` 等系统自带即可）
-- **不需要** `apt install libtiff5`：交付用的 `librcs_proc.so` 已把 libtiff 静态编进库内
+- `processHrrp` — 一维距离像  
+- `processRcs` — RCS 测量  
+- `processCwRcs` — 点频 RCS  
+- `rcsVersion` — 版本字符串  
 
-开发机若要从源码编带拼接的库（x86 / ARM 同一套，静态编进库）：
+大场景拼接相关接口**不交付**，请勿按旧资料去调用。
 
-```bash
-# 本机架构 → install/linux_x86_64 或 linux_aarch64
-./3rdparty/scripts/build_linux_static.sh
-# ARM 交叉（在 x86 上）: ./3rdparty/scripts/build_linux_static.sh aarch64
-cmake -S . -B build -DRCS_ENABLE_MOSAIC=ON -DRCS_TIFF_PREFER_STATIC=ON
-cmake --build build -j && ./sdk/pack_sdk.sh
-```
+## 运行环境
 
-ARM 细节见 `3rdparty/README.md`。
-## 业务接口
+- 与所编 `.so` 匹配的 Linux 架构（x86_64 或 aarch64，以实际交付为准）
+- C++11 编译器；运行时需要常见的 `libstdc++` / `glibc`
+- 一般**不必**再装 libtiff（客户包按关闭拼接、不链系统 tiff 的方式打包）
 
-- `processHrrp` / `processRcs` / `processCwRcs`（点频）
-- `processMosaic` 等大场景接口（本交付包若已开 mosaic；否则返回「已禁用」）
-
-## 快速试跑 demo
+## 编一下 demo
 
 ```bash
 cd demo
 cmake -S . -B build
 cmake --build build
-# 仅打印版本
+
 ./build/rcs_demo
-# 对一份数据跑 HRRP（自动选峰，不交互）
-./build/rcs_demo hrrp /path/to/dat_folder /path/to/out_dir HH
+./build/rcs_demo hrrp /数据目录 /输出目录 HH
+./build/rcs_demo rcs  /数据目录 /输出目录 HH
+./build/rcs_demo cw   /数据目录 /输出目录 HH
 ```
 
-链接时把 `../lib` 加到 `rpath` 或设：
+若找不到 `.so`：
 
 ```bash
 export LD_LIBRARY_PATH=$PWD/../lib:$LD_LIBRARY_PATH
 ```
 
-## 版本
+更细的参数、回调、线程注意点见 `接口使用说明.md`。
 
-与主工程 `rcsVersion()` 一致（当前 `1.0.0`）。
+## 内部重新打包（我们这边用）
 
-重新打包（在工程根目录、先编好 `build_linux`）：
+客户交付建议关拼接再编库，避免头文件与符号对不齐：
 
 ```bash
+cmake -S . -B build -DRCS_ENABLE_MOSAIC=OFF -DRCS_BUILD_GUI=OFF
+cmake --build build -j
 ./sdk/pack_sdk.sh
 ```
+
+`pack_sdk.sh` 会更新 `lib/` 里的 so，并保留本目录下已整理过的对外头文件（不会把内部 mosaic 声明拷进客户包）。
