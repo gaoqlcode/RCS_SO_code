@@ -1,0 +1,12 @@
+prefix=E:/project/SAR-RCS/207_RCS/207_RCS_code/3rdparty/install/mingw73_64
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libtiff
+Description:  Tag Image File Format (TIFF) library.
+Version: 4.6.0
+Libs: -L${libdir} -ltiff
+Libs.private: 
+Cflags: -I${includedir}
+Requires.private:  zlib

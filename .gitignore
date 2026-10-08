@@ -1,0 +1,26 @@
+# Build
+build/
+build_*/
+build_linux/
+cmake-build-*/
+
+# IDE / qmake leftovers
+*.user
+*.autosave
+.qmake.stash
+Makefile
+Makefile.*
+object_script.*
+*:Zone.Identifier
+
+# Generated outputs
+testdata/lib_out/
+bin/
+sdk/demo/build/
+*.o
+moc_*.cpp
+qrc_*.cpp
+
+# OS
+.DS_Store
+Thumbs.db
