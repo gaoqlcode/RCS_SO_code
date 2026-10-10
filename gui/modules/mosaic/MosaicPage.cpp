@@ -4,10 +4,13 @@
 #include "FlattenPanel.h"
 #include "ui/LogProgressPanel.h"
 #include "common/OutPath.h"
+#include "common/OutDirField.h"
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSplitter>
+#include <QSizePolicy>
+#include <QTimer>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QComboBox>
@@ -22,7 +25,6 @@
 #include <QFileInfo>
 #include <QApplication>
 #include <QDialog>
-#include <QDir>
 
 MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
 {
@@ -45,31 +47,32 @@ MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
     inRow->addWidget(browse);
     pathLay->addLayout(inRow);
 
-    outEdit_ = new QLineEdit(pathBox);
-    outEdit_->setMinimumHeight(28);
-    outEdit_->setPlaceholderText(QStringLiteral("输入文件夹/处理结果_拼接"));
-    auto *outBrowse = new QPushButton(QStringLiteral("浏览…"), pathBox);
-    outBrowse->setFixedWidth(72);
-    auto *outRow = new QHBoxLayout;
-    outRow->addWidget(new QLabel(QStringLiteral("输出目录"), pathBox));
-    outRow->addWidget(outEdit_, 1);
-    outRow->addWidget(outBrowse);
-    pathLay->addLayout(outRow);
+    outDir_ = new OutDirField(this);
+    pathLay->addLayout(outDir_->createRow(pathBox));
+    outDir_->setPlaceholderHint(QStringLiteral("输入文件夹"), mosaicResultTag());
     root->addWidget(pathBox);
 
     auto *split = new QSplitter(Qt::Horizontal, this);
     split->setChildrenCollapsible(false);
 
     auto *left = new QWidget(split);
-    left->setMinimumWidth(300);
-    left->setMaximumWidth(420);
+    left->setMinimumWidth(480);
+    left->setStyleSheet(QStringLiteral(
+        "QComboBox,QSpinBox,QDoubleSpinBox,QLineEdit,QPushButton{min-height:30px;}"
+        "QGroupBox{font-weight:600; padding-top:8px;}"));
+    left->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     auto *leftLay = new QVBoxLayout(left);
-    leftLay->setContentsMargins(0, 0, 6, 0);
+    leftLay->setContentsMargins(10, 4, 10, 4);
+    leftLay->setSpacing(10);
 
     auto *paramBox = new QGroupBox(QStringLiteral("处理参数"), left);
     auto *form = new QFormLayout(paramBox);
-    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    form->setHorizontalSpacing(12);
+    form->setVerticalSpacing(8);
+    form->setContentsMargins(8, 10, 8, 8);
     modeCombo_ = new QComboBox(paramBox);
     modeCombo_->addItem(QStringLiteral("自动拼接"), 0);
     modeCombo_->addItem(QStringLiteral("手动拼接"), 1);
@@ -128,7 +131,11 @@ MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
     split->addWidget(right);
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
-    split->setSizes(QList<int>() << 340 << 1200);
+    split->setSizes(QList<int>() << 560 << 1000);
+    // 首帧再设一次，避免被右侧图最小宽度挤窄
+    QTimer::singleShot(0, split, [split]() {
+        split->setSizes(QList<int>() << 560 << qMax(800, split->width() - 560));
+    });
     root->addWidget(split, 1);
 
     thread_ = new QThread(this);
@@ -154,23 +161,11 @@ MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
         const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("选择输入文件夹(TIFF或RAW)"));
         if (!d.isEmpty()) {
             inEdit_->setText(d);
-            outDirUserEdited_ = false;
-            refreshDefaultOut();
+            outDir_->resetFromBase(d, mosaicResultTag());
         }
     });
-    connect(outBrowse, &QPushButton::clicked, this, [this]() {
-        const QString start = outEdit_->text().trimmed().isEmpty()
-                                  ? inEdit_->text().trimmed()
-                                  : outEdit_->text().trimmed();
-        const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("选择输出目录"), start);
-        if (!d.isEmpty()) {
-            outEdit_->setText(d);
-            outDirUserEdited_ = true;
-        }
-    });
-    connect(inEdit_, &QLineEdit::editingFinished, this, &MosaicPage::refreshDefaultOut);
-    connect(outEdit_, &QLineEdit::textEdited, this, [this](const QString &) {
-        outDirUserEdited_ = true;
+    connect(inEdit_, &QLineEdit::editingFinished, this, [this]() {
+        outDir_->resetFromBase(inEdit_->text().trimmed(), mosaicResultTag());
     });
     connect(startBtn_, &QPushButton::clicked, this, &MosaicPage::onStart);
     connect(cancelBtn_, &QPushButton::clicked, this, &MosaicPage::onCancel);
@@ -187,16 +182,7 @@ MosaicPage::~MosaicPage()
 
 void MosaicPage::refreshDefaultOut()
 {
-    const QString data = inEdit_->text().trimmed();
-    if (data.isEmpty())
-        return;
-    const QString autoPath = defaultResultDir(data, mosaicResultTag());
-    if (!outDirUserEdited_ || outEdit_->text().trimmed().isEmpty()
-        || outEdit_->text().trimmed() == lastAutoOut_) {
-        outEdit_->setText(QDir::toNativeSeparators(autoPath));
-        lastAutoOut_ = outEdit_->text();
-        outDirUserEdited_ = false;
-    }
+    outDir_->refresh(inEdit_ ? inEdit_->text().trimmed() : QString(), mosaicResultTag());
 }
 
 void MosaicPage::setBusy(bool busy)
@@ -291,7 +277,7 @@ void MosaicPage::onStart()
 
     MosaicParams p;
     p.inFolder = inEdit_->text().trimmed();
-    p.outFolder = outEdit_->text().trimmed();
+    p.outFolder = outDir_->text();
     p.doFlatten = flattenCheck_->isChecked();
     p.medOut = medSpin_->value();
     p.mode = modeCombo_->currentData().toInt();

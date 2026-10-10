@@ -40,38 +40,47 @@ void PulseCompress::apply(ComplexMatrix &data, double bandwidthMHz, double pulse
     const int np = data.np;
     unsigned hc = std::thread::hardware_concurrency();
     const int nt = static_cast<int>(hc == 0 ? 2 : imin(hc, 8u));
-    std::atomic<int> next{0};
-    std::atomic<int> done{0};
-    std::atomic<bool> stop{false};
-    std::vector<std::thread> pool;
-    pool.reserve(static_cast<size_t>(nt));
-    for (int t = 0; t < nt; ++t) {
-        pool.emplace_back([&]() {
-            std::vector<std::complex<double> > col(static_cast<size_t>(N));
-            for (;;) {
-                if (cancelled && cancelled()) {
-                    stop = true;
-                    return;
+    // 分块并行：progress 只在调用线程（GUI Worker）上触发，避免 Windows 上从池线程 emit 闪退
+    const int chunk = imax(nt * 16, 128);
+
+    for (int p0 = 0; p0 < np;) {
+        if (cancelled && cancelled())
+            return;
+        const int p1 = imin(np, p0 + chunk);
+        std::atomic<int> next{p0};
+        std::atomic<bool> stop{false};
+        std::vector<std::thread> pool;
+        pool.reserve(static_cast<size_t>(nt));
+        for (int t = 0; t < nt; ++t) {
+            pool.emplace_back([&]() {
+                std::vector<std::complex<double> > col(static_cast<size_t>(N));
+                for (;;) {
+                    if (cancelled && cancelled()) {
+                        stop = true;
+                        return;
+                    }
+                    if (stop.load())
+                        return;
+                    const int p = next.fetch_add(1);
+                    if (p >= p1)
+                        return;
+                    for (int g = 0; g < N; ++g)
+                        col[static_cast<size_t>(g)] = data.at(g, p);
+                    FftBackend::fftLength(col, N, false);
+                    for (int g = 0; g < N; ++g)
+                        col[static_cast<size_t>(g)] *= Ref[static_cast<size_t>(g)];
+                    FftBackend::fftLength(col, N, true);
+                    for (int g = 0; g < N; ++g)
+                        data.at(g, p) = col[static_cast<size_t>(g)];
                 }
-                if (stop.load())
-                    return;
-                const int p = next.fetch_add(1);
-                if (p >= np)
-                    return;
-                for (int g = 0; g < N; ++g)
-                    col[static_cast<size_t>(g)] = data.at(g, p);
-                FftBackend::fftLength(col, N, false);
-                for (int g = 0; g < N; ++g)
-                    col[static_cast<size_t>(g)] *= Ref[static_cast<size_t>(g)];
-                FftBackend::fftLength(col, N, true);
-                for (int g = 0; g < N; ++g)
-                    data.at(g, p) = col[static_cast<size_t>(g)];
-                const int d = done.fetch_add(1) + 1;
-                if (progress && (d % 64 == 0 || d == np))
-                    progress(d * 100 / np);
-            }
-        });
+            });
+        }
+        for (auto &th : pool)
+            th.join();
+        if (stop.load() || (cancelled && cancelled()))
+            return;
+        p0 = p1;
+        if (progress)
+            progress(p0 * 100 / imax(1, np));
     }
-    for (auto &th : pool)
-        th.join();
 }

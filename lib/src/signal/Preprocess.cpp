@@ -16,6 +16,19 @@ void Preprocess::removeDc(ComplexMatrix &data)
     }
 }
 
+void Preprocess::removeDcPerPulse(ComplexMatrix &data)
+{
+    // MATLAB RCS_DianPin: z = z - mean(z); 每脉冲沿距离向
+    for (int p = 0; p < data.np; ++p) {
+        std::complex<double> m{0, 0};
+        for (int g = 0; g < data.nr; ++g)
+            m += data.at(g, p);
+        m /= static_cast<double>(imax(1, data.nr));
+        for (int g = 0; g < data.nr; ++g)
+            data.at(g, p) -= m;
+    }
+}
+
 void Preprocess::removeDirectWave(ComplexMatrix &data, double pulseWidthUs, double fs)
 {
     const int Nr = data.nr;

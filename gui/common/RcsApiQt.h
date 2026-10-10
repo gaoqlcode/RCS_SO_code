@@ -56,6 +56,7 @@ inline InteractSelection toLibSel(const UserSelection &q)
     return a;
 }
 
+#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
 struct MosaicResultQt {
     QString mosaicTif;
     QString offsetsCsv;
@@ -77,5 +78,6 @@ inline MosaicResultQt toQtMosaic(const MosaicResponse &r)
         o.seamCols.push_back(r.seamCols[i]);
     return o;
 }
+#endif
 
 #endif

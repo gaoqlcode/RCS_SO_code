@@ -28,24 +28,29 @@ inline std::string hrrpResultTag(const std::string &pol)
     return std::string("HRRP_") + toUpperStr(trimStr(pol));
 }
 
-inline std::string mosaicResultTag()
-{
-    return std::string("拼接");
-}
-
 inline std::string cwRcsResultTag(const std::string &pol)
 {
     return std::string("点频RCS_") + toUpperStr(trimStr(pol));
 }
 
-// 用户指定了目录就用；否则落到数据目录下带标记的子目录
-inline std::string resolveOutDir(const std::string &userOut, const std::string &dataFolder,
+inline std::string sigma0ResultTag()
+{
+    return std::string("后向散射");
+}
+
+inline std::string mosaicResultTag()
+{
+    return std::string("拼接");
+}
+
+// 用户指定了目录就用；否则落到输入基目录下带标记的子目录
+inline std::string resolveOutDir(const std::string &userOut, const std::string &baseFolder,
                                  const std::string &tag)
 {
     const std::string u = trimStr(userOut);
     if (!u.empty())
         return u;
-    return defaultResultDir(dataFolder, tag);
+    return defaultResultDir(baseFolder, tag);
 }
 
 #endif

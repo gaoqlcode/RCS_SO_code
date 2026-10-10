@@ -73,7 +73,13 @@ static std::string fmt(double v, int prec)
 
 static bool writeTextUtf8(const std::string &path, const std::string &text, std::string *err)
 {
-    if (!writeFileAll(path, text.data(), text.size())) {
+    // 带 UTF-8 BOM：Windows 记事本/Word 才能自动按 UTF-8 打开，否则中文会乱码
+    static const char kBom[] = "\xEF\xBB\xBF";
+    std::string out;
+    out.reserve(3 + text.size());
+    out.append(kBom, 3);
+    out.append(text);
+    if (!writeFileAll(path, out.data(), out.size())) {
         if (err)
             *err = "无法创建: " + path;
         return false;
@@ -141,6 +147,29 @@ bool Level3Text::saveCwRcs(const std::string &path, const std::vector<double> &f
             f << "NaN";
         f << "  0.00  0.00  0.00  0.00  0.00  " << fmt(az, 2) << "  " << fmt(roll, 2) << "  "
           << rangeCol << "\n";
+    }
+    f << "[/DATA]\n";
+    return writeTextUtf8(path, f.str(), err);
+}
+
+bool Level3Text::saveCs(const std::string &path, const std::vector<double> &timeMs,
+                        const std::vector<double> &sigma0Db, const Level3Info &info,
+                        std::string *err)
+{
+    if (sigma0Db.empty()) {
+        if (err)
+            *err = "sigma0 为空，不写 .cs";
+        return false;
+    }
+    Level3Info info2 = info;
+    if (info2.dataType.empty())
+        info2.dataType = "后向散射系数";
+    std::ostringstream f;
+    writeCommonHeader(f, info2, true);
+    f << "[DATA]\n";
+    for (size_t i = 0; i < sigma0Db.size(); ++i) {
+        const double t = (i < timeMs.size()) ? timeMs[i] : (timeMs.empty() ? 0.0 : timeMs.back());
+        f << fmt(t, 3) << "  " << fmt(sigma0Db[i], 2) << "\n";
     }
     f << "[/DATA]\n";
     return writeTextUtf8(path, f.str(), err);

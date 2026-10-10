@@ -1,5 +1,7 @@
 #include "ProcessWorker.h"
 #include <QMutexLocker>
+#include <QMetaObject>
+#include <QThread>
 
 ProcessWorker::ProcessWorker(QObject *parent) : QObject(parent) {}
 
@@ -25,7 +27,16 @@ bool ProcessWorker::isCancelled() const
 
 void ProcessWorker::emitProgress(int percent, const QString &status)
 {
-    emit progress(percent, status);
+    // 库内线程池不得直接 emit；若误从其它线程回调，投递回 Worker 线程
+    if (QThread::currentThread() == thread()) {
+        emit progress(percent, status);
+        return;
+    }
+    const QString s = status;
+    QMetaObject::invokeMethod(
+        this,
+        [this, percent, s]() { emit progress(percent, s); },
+        Qt::QueuedConnection);
 }
 
 bool ProcessWorker::waitForSelection(UserSelection &out)

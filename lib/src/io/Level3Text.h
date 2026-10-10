@@ -22,6 +22,11 @@ public:
                           const std::vector<double> &rcsDbsm, const std::vector<double> &tmsMs,
                           const std::vector<double> &azDeg, const std::vector<double> &rollDeg,
                           const std::string &rangeCol, const Level3Info &info, std::string *err = 0);
+
+    // 后向散射 .cs：[DATA] 时间(ms) 散射系数(dB)，每目标一行
+    static bool saveCs(const std::string &path, const std::vector<double> &timeMs,
+                       const std::vector<double> &sigma0Db, const Level3Info &info,
+                       std::string *err = 0);
 };
 
 #endif

@@ -3,6 +3,7 @@ build/
 build_*/
 build_linux/
 cmake-build-*/
+deploy/
 
 # IDE / qmake leftovers
 *.user

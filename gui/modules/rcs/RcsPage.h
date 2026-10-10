@@ -15,6 +15,7 @@ class QLabel;
 class LogProgressPanel;
 class InteractivePlotWidget;
 class SharedDataSession;
+class OutDirField;
 
 class RcsPage : public QWidget {
     Q_OBJECT
@@ -23,7 +24,7 @@ public:
     ~RcsPage() override;
 
 private slots:
-    void onBrowseOut();
+    void onBrowseFolder();
     void onStart();
     void onCancel();
     void onDataFolderChanged(const QString &path);
@@ -39,7 +40,8 @@ private:
                                 int fullNr, int fullNp, const QVector<double> &meanPowerDb, bool askMode);
 
     SharedDataSession *session_;
-    QLineEdit *outEdit_;
+    QLineEdit *folderEdit_;
+    OutDirField *outDir_;
     QLineEdit *nameEdit_;
     QComboBox *polCombo_;
     QComboBox *azModeCombo_;
@@ -51,8 +53,6 @@ private:
     LogProgressPanel *log_;
     InteractivePlotWidget *plot_;
     QLabel *cursorLabel_;
-    QString lastAutoOut_;
-    bool outDirUserEdited_;
 
     QThread *thread_;
     RcsWorker *worker_;

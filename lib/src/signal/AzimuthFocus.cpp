@@ -26,79 +26,87 @@ void AzimuthFocus::apply(ComplexMatrix &data, const std::vector<double> &R, int 
 
     unsigned hc = std::thread::hardware_concurrency();
     const int nt = static_cast<int>(hc == 0 ? 2 : imin(hc, 8u));
-    std::atomic<int> next{0};
-    std::atomic<int> done{0};
-    std::atomic<bool> stop{false};
-    std::vector<std::thread> pool;
-    pool.reserve(static_cast<size_t>(nt));
+    // 分块并行：progress 只在调用线程上触发（勿从池线程回调到 Qt emit）
+    const int chunk = imax(nt * 16, 128);
+
+    auto runChunk = [&](int g0, int g1, const std::function<void(int g, std::vector<std::complex<double> > &row)> &work) {
+        std::atomic<int> next{g0};
+        std::atomic<bool> stop{false};
+        std::vector<std::thread> pool;
+        pool.reserve(static_cast<size_t>(nt));
+        for (int t = 0; t < nt; ++t) {
+            pool.emplace_back([&]() {
+                std::vector<std::complex<double> > row(static_cast<size_t>(Np));
+                for (;;) {
+                    if (cancelled && cancelled()) {
+                        stop = true;
+                        return;
+                    }
+                    if (stop.load())
+                        return;
+                    const int g = next.fetch_add(1);
+                    if (g >= g1)
+                        return;
+                    work(g, row);
+                }
+            });
+        }
+        for (auto &th : pool)
+            th.join();
+        return !stop.load();
+    };
 
     if (mode == 1) {
         std::vector<double> fEta(static_cast<size_t>(Np));
         for (int k = 0; k < Np; ++k)
             fEta[static_cast<size_t>(k)] = (k - Np / 2.0) / Np * prf;
-        for (int t = 0; t < nt; ++t) {
-            pool.emplace_back([&]() {
-                std::vector<std::complex<double> > row(static_cast<size_t>(Np));
-                for (;;) {
-                    if (cancelled && cancelled()) {
-                        stop = true;
-                        return;
-                    }
-                    if (stop.load())
-                        return;
-                    const int g = next.fetch_add(1);
-                    if (g >= Nr)
-                        return;
-                    const double Rg =
-                        (g < static_cast<int>(R.size())) ? R[static_cast<size_t>(g)] : R.back();
-                    const double Ka = 2.0 * vSar * vSar / (lambda * imax(Rg, 1e-6));
-                    for (int p = 0; p < Np; ++p)
-                        row[static_cast<size_t>(p)] = data.at(g, p);
-                    FftBackend::fft(row, false);
-                    fftshiftInPlace(row);
-                    for (int p = 0; p < Np; ++p) {
-                        const double f = fEta[static_cast<size_t>(p)];
-                        row[static_cast<size_t>(p)] *=
-                            std::exp(std::complex<double>(0, 3.14159265358979323846 * f * f / Ka));
-                    }
-                    fftshiftInPlace(row);
-                    FftBackend::fft(row, true);
-                    for (int p = 0; p < Np; ++p)
-                        data.at(g, p) = row[static_cast<size_t>(p)];
-                    const int d = done.fetch_add(1) + 1;
-                    if (progress && (d % 64 == 0 || d == Nr))
-                        progress(d * 100 / Nr);
+        for (int g0 = 0; g0 < Nr;) {
+            if (cancelled && cancelled())
+                return;
+            const int g1 = imin(Nr, g0 + chunk);
+            const bool ok = runChunk(g0, g1, [&](int g, std::vector<std::complex<double> > &row) {
+                const double Rg =
+                    (g < static_cast<int>(R.size())) ? R[static_cast<size_t>(g)] : R.back();
+                const double Ka = 2.0 * vSar * vSar / (lambda * imax(Rg, 1e-6));
+                for (int p = 0; p < Np; ++p)
+                    row[static_cast<size_t>(p)] = data.at(g, p);
+                FftBackend::fft(row, false);
+                fftshiftInPlace(row);
+                for (int p = 0; p < Np; ++p) {
+                    const double f = fEta[static_cast<size_t>(p)];
+                    row[static_cast<size_t>(p)] *=
+                        std::exp(std::complex<double>(0, 3.14159265358979323846 * f * f / Ka));
                 }
+                fftshiftInPlace(row);
+                FftBackend::fft(row, true);
+                for (int p = 0; p < Np; ++p)
+                    data.at(g, p) = row[static_cast<size_t>(p)];
             });
+            if (!ok || (cancelled && cancelled()))
+                return;
+            g0 = g1;
+            if (progress)
+                progress(g0 * 100 / imax(1, Nr));
         }
     } else {
         const double scale = 1.0 / std::sqrt(static_cast<double>(Np));
-        for (int t = 0; t < nt; ++t) {
-            pool.emplace_back([&]() {
-                std::vector<std::complex<double> > row(static_cast<size_t>(Np));
-                for (;;) {
-                    if (cancelled && cancelled()) {
-                        stop = true;
-                        return;
-                    }
-                    if (stop.load())
-                        return;
-                    const int g = next.fetch_add(1);
-                    if (g >= Nr)
-                        return;
-                    for (int p = 0; p < Np; ++p)
-                        row[static_cast<size_t>(p)] = data.at(g, p);
-                    FftBackend::fft(row, false);
-                    fftshiftInPlace(row);
-                    for (int p = 0; p < Np; ++p)
-                        data.at(g, p) = row[static_cast<size_t>(p)] * scale;
-                    const int d = done.fetch_add(1) + 1;
-                    if (progress && (d % 64 == 0 || d == Nr))
-                        progress(d * 100 / Nr);
-                }
+        for (int g0 = 0; g0 < Nr;) {
+            if (cancelled && cancelled())
+                return;
+            const int g1 = imin(Nr, g0 + chunk);
+            const bool ok = runChunk(g0, g1, [&](int g, std::vector<std::complex<double> > &row) {
+                for (int p = 0; p < Np; ++p)
+                    row[static_cast<size_t>(p)] = data.at(g, p);
+                FftBackend::fft(row, false);
+                fftshiftInPlace(row);
+                for (int p = 0; p < Np; ++p)
+                    data.at(g, p) = row[static_cast<size_t>(p)] * scale;
             });
+            if (!ok || (cancelled && cancelled()))
+                return;
+            g0 = g1;
+            if (progress)
+                progress(g0 * 100 / imax(1, Nr));
         }
     }
-    for (auto &th : pool)
-        th.join();
 }

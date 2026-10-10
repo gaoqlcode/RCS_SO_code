@@ -353,7 +353,8 @@ bool processCwRcs(const CwRcsRequest &req, CwRcsResponse &resp, Callbacks &cb, s
         azF[static_cast<size_t>(i)] = fm.azRaw / 100.0;
         rollF[static_cast<size_t>(i)] = fm.rollRaw / 100.0;
 
-        Preprocess::removeDc(data);
+        // 与 RCS_DianPin.m 一致：每脉冲沿距离去直流（勿用 RCS/HRRP 的按门去直流）
+        Preprocess::removeDcPerPulse(data);
         PulseCompress::apply(data, hdr.bwMHz, pulseWidthUs, fs, nullptr,
                               [&]() { return cancelled(cb); });
         if (cancelled(cb)) {

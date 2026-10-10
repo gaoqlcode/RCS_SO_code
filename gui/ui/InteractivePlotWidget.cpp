@@ -24,7 +24,7 @@ int selectTickPrecision(double span)
 
 InteractivePlotWidget::InteractivePlotWidget(QWidget *parent) : QWidget(parent)
 {
-    setMinimumSize(560, 380);
+    setMinimumSize(400, 220);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
     setAutoFillBackground(true);
@@ -47,8 +47,29 @@ void InteractivePlotWidget::setData(const QVector<double> &x, const QVector<doub
 {
     x_ = x;
     y_ = y;
+    showCrosshair_ = false;
     updateBounds();
     resetView();
+}
+
+bool InteractivePlotWidget::snapToCurve(double dataX, double &sx, double &sy) const
+{
+    const int n = qMin(x_.size(), y_.size());
+    if (n <= 0)
+        return false;
+    // 按 x 最近邻（曲线通常单调）；若非严格单调也取 |x-dataX| 最小点
+    int best = 0;
+    double bestDx = std::abs(x_[0] - dataX);
+    for (int i = 1; i < n; ++i) {
+        const double dx = std::abs(x_[i] - dataX);
+        if (dx < bestDx) {
+            bestDx = dx;
+            best = i;
+        }
+    }
+    sx = x_[best];
+    sy = y_[best];
+    return true;
 }
 
 void InteractivePlotWidget::updateBounds()
@@ -70,14 +91,34 @@ void InteractivePlotWidget::updateBounds()
     if (qFuzzyCompare(yMin_, yMax_)) { yMin_ -= 1; yMax_ += 1; }
 }
 
+void InteractivePlotWidget::setFixedYRange(double lo, double hi)
+{
+    if (lo >= hi) {
+        fixedY_ = false;
+    } else {
+        fixedY_ = true;
+        fixedY0_ = lo;
+        fixedY1_ = hi;
+    }
+    if (!x_.isEmpty())
+        resetView();
+    else
+        update();
+}
+
 void InteractivePlotWidget::resetView()
 {
     const double xPad = qMax(safeMinSpan(xMax_ - xMin_), (xMax_ - xMin_) * 0.05);
-    const double yPad = qMax(safeMinSpan(yMax_ - yMin_), (yMax_ - yMin_) * 0.08);
     vx0_ = xMin_ - xPad;
     vx1_ = xMax_ + xPad;
-    vy0_ = yMin_ - yPad;
-    vy1_ = yMax_ + yPad;
+    if (fixedY_) {
+        vy0_ = fixedY0_;
+        vy1_ = fixedY1_;
+    } else {
+        const double yPad = qMax(safeMinSpan(yMax_ - yMin_), (yMax_ - yMin_) * 0.08);
+        vy0_ = yMin_ - yPad;
+        vy1_ = yMax_ + yPad;
+    }
     clampViewRanges();
     update();
 }
@@ -85,36 +126,37 @@ void InteractivePlotWidget::resetView()
 void InteractivePlotWidget::clampViewRanges()
 {
     const double minXSpan = safeMinSpan(xMax_ - xMin_);
-    const double minYSpan = safeMinSpan(yMax_ - yMin_);
+    const double minYSpan = fixedY_ ? safeMinSpan(fixedY1_ - fixedY0_) : safeMinSpan(yMax_ - yMin_);
     if (vx1_ - vx0_ < minXSpan) {
         const double c = 0.5 * (vx0_ + vx1_);
         vx0_ = c - 0.5 * minXSpan;
         vx1_ = c + 0.5 * minXSpan;
     }
-    if (vy1_ - vy0_ < minYSpan) {
+    if (!fixedY_ && vy1_ - vy0_ < minYSpan) {
         const double c = 0.5 * (vy0_ + vy1_);
         vy0_ = c - 0.5 * minYSpan;
         vy1_ = c + 0.5 * minYSpan;
     }
     // 放大不超过数据范围过多；缩小(放大视野)也不要无限飞出
     const double maxXPad = (xMax_ - xMin_) * 2.0 + minXSpan;
-    const double maxYPad = (yMax_ - yMin_) * 2.0 + minYSpan;
     vx0_ = qMax(xMin_ - maxXPad, vx0_);
     vx1_ = qMin(xMax_ + maxXPad, vx1_);
-    vy0_ = qMax(yMin_ - maxYPad, vy0_);
-    vy1_ = qMin(yMax_ + maxYPad, vy1_);
-    // 防止缩放过猛导致视野比最大允许还大
     if (vx1_ - vx0_ > (xMax_ - xMin_) + 2 * maxXPad) {
         const double c = 0.5 * (xMin_ + xMax_);
         const double half = 0.5 * ((xMax_ - xMin_) + 2 * maxXPad);
         vx0_ = c - half;
         vx1_ = c + half;
     }
-    if (vy1_ - vy0_ > (yMax_ - yMin_) + 2 * maxYPad) {
-        const double c = 0.5 * (yMin_ + yMax_);
-        const double half = 0.5 * ((yMax_ - yMin_) + 2 * maxYPad);
-        vy0_ = c - half;
-        vy1_ = c + half;
+    if (!fixedY_) {
+        const double maxYPad = (yMax_ - yMin_) * 2.0 + minYSpan;
+        vy0_ = qMax(yMin_ - maxYPad, vy0_);
+        vy1_ = qMin(yMax_ + maxYPad, vy1_);
+        if (vy1_ - vy0_ > (yMax_ - yMin_) + 2 * maxYPad) {
+            const double c = 0.5 * (yMin_ + yMax_);
+            const double half = 0.5 * ((yMax_ - yMin_) + 2 * maxYPad);
+            vy0_ = c - half;
+            vy1_ = c + half;
+        }
     }
 }
 
@@ -166,16 +208,20 @@ void InteractivePlotWidget::zoomAt(const QPoint &pos, double factor)
 void InteractivePlotWidget::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
+    // 稠密曲线关抗锯齿，切换「下一组」时明显更快
+    p.setRenderHint(QPainter::Antialiasing, false);
     p.fillRect(rect(), Qt::white);
     const QRect r = plotRect();
     p.fillRect(r, Qt::white);
     p.setPen(QPen(Qt::black, 1));
     p.drawRect(r);
 
-    QFont titleFont(QStringLiteral("Microsoft YaHei UI"), 10);
-    QFont tickFont(QStringLiteral("Microsoft YaHei UI"), 8);
-    QFont labelFont(QStringLiteral("Microsoft YaHei UI"), 9);
+    QFont titleFont = font();
+    titleFont.setPointSize(10);
+    QFont tickFont = font();
+    tickFont.setPointSize(8);
+    QFont labelFont = font();
+    labelFont.setPointSize(9);
     p.setFont(titleFont);
     p.drawText(QRect(0, 8, width(), 24), Qt::AlignCenter, title_);
 
@@ -189,14 +235,89 @@ void InteractivePlotWidget::paintEvent(QPaintEvent *)
         p.setClipRect(r.adjusted(1, 1, -1, -1));
         QPolygonF poly;
         const int n = qMin(x_.size(), y_.size());
-        for (int i = 0; i < n; ++i) {
-            if (x_[i] < vx0_ || x_[i] > vx1_)
-                continue;
-            poly << mapDataToPixel(x_[i], y_[i]);
+        // 按像素列抽稀：每列保留 min/max，点数从数万降到约 2*宽度
+        const int maxSeg = qMax(2, r.width());
+        if (n <= maxSeg * 2) {
+            poly.reserve(n);
+            for (int i = 0; i < n; ++i) {
+                if (x_[i] < vx0_ || x_[i] > vx1_)
+                    continue;
+                poly << mapDataToPixel(x_[i], y_[i]);
+            }
+        } else {
+            poly.reserve(maxSeg * 2 + 2);
+            int i0 = 0;
+            while (i0 < n && x_[i0] < vx0_)
+                ++i0;
+            int i1 = n - 1;
+            while (i1 > i0 && x_[i1] > vx1_)
+                --i1;
+            const int span = i1 - i0 + 1;
+            if (span > 0) {
+                const int buckets = qMin(maxSeg, span);
+                for (int b = 0; b < buckets; ++b) {
+                    const int a = i0 + (b * span) / buckets;
+                    const int c = i0 + ((b + 1) * span) / buckets;
+                    int imin = a, imax = a;
+                    for (int i = a; i < c && i <= i1; ++i) {
+                        if (y_[i] < y_[imin])
+                            imin = i;
+                        if (y_[i] > y_[imax])
+                            imax = i;
+                    }
+                    if (imin <= imax) {
+                        poly << mapDataToPixel(x_[imin], y_[imin]);
+                        if (imax != imin)
+                            poly << mapDataToPixel(x_[imax], y_[imax]);
+                    } else {
+                        poly << mapDataToPixel(x_[imax], y_[imax]);
+                        poly << mapDataToPixel(x_[imin], y_[imin]);
+                    }
+                }
+            }
         }
-        p.setPen(QPen(QColor(30, 90, 180), 1.5));
+        p.setPen(QPen(QColor(30, 90, 180), 1));
         if (!poly.isEmpty())
             p.drawPolyline(poly);
+
+        // 吸附十字线：竖线落到 x 轴、横线落到 y 轴，交点在曲线采样点上
+        if (showCrosshair_) {
+            const QPointF pt = mapDataToPixel(snapX_, snapY_);
+            p.setPen(QPen(QColor(200, 60, 40), 1, Qt::DashLine));
+            p.drawLine(QPointF(pt.x(), r.top()), QPointF(pt.x(), r.bottom()));
+            p.drawLine(QPointF(r.left(), pt.y()), QPointF(r.right(), pt.y()));
+            p.setPen(QPen(QColor(200, 60, 40), 1));
+            p.setBrush(QColor(200, 60, 40));
+            p.drawEllipse(pt, 3.5, 3.5);
+
+            // 交点旁显示吸附点坐标（与 cursorInfo 精度一致）
+            const QString coord = QStringLiteral("(%1, %2)")
+                                     .arg(snapX_, 0, 'f', 3)
+                                     .arg(snapY_, 0, 'f', 2);
+            QFont coordFont = p.font();
+            coordFont.setPointSize(qMax(9, coordFont.pointSize()));
+            p.setFont(coordFont);
+            const QFontMetrics fm(coordFont);
+            const QSize ts = fm.size(0, coord);
+            const int pad = 3;
+            const int gap = 8;
+            int lx = static_cast<int>(pt.x()) + gap;
+            int ly = static_cast<int>(pt.y()) - gap - ts.height() - pad * 2;
+            if (lx + ts.width() + pad * 2 > r.right())
+                lx = static_cast<int>(pt.x()) - gap - ts.width() - pad * 2;
+            if (ly < r.top())
+                ly = static_cast<int>(pt.y()) + gap;
+            if (lx < r.left())
+                lx = r.left() + 2;
+            if (ly + ts.height() + pad * 2 > r.bottom())
+                ly = r.bottom() - ts.height() - pad * 2 - 2;
+            const QRect bg(lx, ly, ts.width() + pad * 2, ts.height() + pad * 2);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(255, 255, 255, 210));
+            p.drawRoundedRect(bg, 3, 3);
+            p.setPen(QColor(40, 40, 40));
+            p.drawText(bg.adjusted(pad, 0, -pad, 0), Qt::AlignLeft | Qt::AlignVCenter, coord);
+        }
         p.restore();
     }
 
@@ -250,6 +371,8 @@ void InteractivePlotWidget::mousePressEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton
         || event->button() == Qt::RightButton) {
         panning_ = true;
+        dragged_ = false;
+        pressPos_ = event->pos();
         lastPos_ = event->pos();
         setCursor(Qt::ClosedHandCursor);
     }
@@ -259,9 +382,11 @@ void InteractivePlotWidget::mouseMoveEvent(QMouseEvent *event)
 {
     if (panning_) {
         const QPoint d = event->pos() - lastPos_;
+        if ((event->pos() - pressPos_).manhattanLength() > 4)
+            dragged_ = true;
         lastPos_ = event->pos();
         const QRect r = plotRect();
-        if (r.width() > 0 && r.height() > 0) {
+        if (r.width() > 0 && r.height() > 0 && dragged_) {
             const double dx = -d.x() * (vx1_ - vx0_) / r.width();
             const double dy = d.y() * (vy1_ - vy0_) / r.height();
             vx0_ += dx;
@@ -272,17 +397,31 @@ void InteractivePlotWidget::mouseMoveEvent(QMouseEvent *event)
             update();
         }
     }
+
     double x = 0, y = 0;
-    if (mapPixelToData(event->pos(), x, y))
-        emit cursorInfo(QStringLiteral("距离=%1 m  数值=%2").arg(x, 0, 'f', 3).arg(y, 0, 'f', 2));
-    else
+    if (mapPixelToData(event->pos(), x, y) && snapToCurve(x, snapX_, snapY_)) {
+        showCrosshair_ = true;
+        emit cursorInfo(QStringLiteral("x=%1  y=%2（曲线）")
+                            .arg(snapX_, 0, 'f', 3)
+                            .arg(snapY_, 0, 'f', 2));
+        update();
+    } else {
+        if (showCrosshair_) {
+            showCrosshair_ = false;
+            update();
+        }
         emit cursorInfo(QString());
+    }
 }
 
-void InteractivePlotWidget::mouseReleaseEvent(QMouseEvent *)
+void InteractivePlotWidget::mouseReleaseEvent(QMouseEvent *event)
 {
+    const bool wasDrag = dragged_;
     panning_ = false;
+    dragged_ = false;
     unsetCursor();
+    if (!wasDrag && event->button() == Qt::LeftButton)
+        emit plotClicked();
 }
 
 void InteractivePlotWidget::mouseDoubleClickEvent(QMouseEvent *)
@@ -290,7 +429,17 @@ void InteractivePlotWidget::mouseDoubleClickEvent(QMouseEvent *)
     resetView();
 }
 
+void InteractivePlotWidget::enterEvent(QEvent *)
+{
+    emit hoverEntered();
+}
+
 void InteractivePlotWidget::leaveEvent(QEvent *)
 {
+    if (showCrosshair_) {
+        showCrosshair_ = false;
+        update();
+    }
     emit cursorInfo(QString());
+    emit hoverLeft();
 }

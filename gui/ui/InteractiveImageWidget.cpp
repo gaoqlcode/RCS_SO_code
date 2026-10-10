@@ -191,7 +191,10 @@ void InteractiveImageWidget::mousePressEvent(QMouseEvent *event)
             picks_.push_back(pt);
             emit pickChanged(picks_);
             double rm = (rg < rangeM_.size()) ? rangeM_[rg] : rg;
-            emit statusText(QStringLiteral("选点 az=%1 rg=%2 R=%.2fm").arg(az).arg(rg).arg(rm));
+            emit statusText(QStringLiteral("选点 az=%1 rg=%2 R=%3m")
+                                .arg(az)
+                                .arg(rg)
+                                .arg(rm, 0, 'f', 2));
             update();
         }
     }

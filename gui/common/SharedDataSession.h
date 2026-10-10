@@ -4,7 +4,7 @@
 #include <QObject>
 #include <QString>
 
-// 主壳一次选好的数据文件夹，RCS / HRRP / 点频共用
+// 各页「数据路径」后台同步：L0 / RCS / HRRP / 点频改一处，其余跟进
 class SharedDataSession : public QObject {
     Q_OBJECT
 public:

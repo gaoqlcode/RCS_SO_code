@@ -14,6 +14,7 @@ class QLabel;
 class LogProgressPanel;
 class InteractivePlotWidget;
 class SharedDataSession;
+class OutDirField;
 
 class CwRcsPage : public QWidget {
     Q_OBJECT
@@ -22,7 +23,7 @@ public:
     ~CwRcsPage() override;
 
 private slots:
-    void onBrowseOut();
+    void onBrowseFolder();
     void onStart();
     void onCancel();
     void onDataFolderChanged(const QString &path);
@@ -37,7 +38,8 @@ private:
     UserSelection runTargetDialog(const QVector<double> &R, const QVector<double> &meanPowerDb);
 
     SharedDataSession *session_;
-    QLineEdit *outEdit_;
+    QLineEdit *folderEdit_;
+    OutDirField *outDir_;
     QLineEdit *nameEdit_;
     QComboBox *polCombo_;
     QDoubleSpinBox *sigmaSpin_;
@@ -46,8 +48,6 @@ private:
     LogProgressPanel *log_;
     InteractivePlotWidget *plot_;
     QLabel *cursorLabel_;
-    QString lastAutoOut_;
-    bool outDirUserEdited_;
 
     QThread *thread_;
     CwRcsWorker *worker_;

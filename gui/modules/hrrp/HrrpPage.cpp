@@ -3,10 +3,13 @@
 #include "ui/LogProgressPanel.h"
 #include "ui/InteractivePlotWidget.h"
 #include "common/OutPath.h"
+#include "common/OutDirField.h"
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSplitter>
+#include <QSizePolicy>
+#include <QTimer>
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QComboBox>
@@ -18,14 +21,14 @@
 #include <QInputDialog>
 #include <QMetaObject>
 #include <QLabel>
-#include <QDir>
 #include <QApplication>
 #include <QDialog>
 
 HrrpPage::HrrpPage(SharedDataSession *session, QWidget *parent)
     : QWidget(parent)
     , session_(session)
-    , outEdit_(0)
+    , folderEdit_(0)
+    , outDir_(0)
     , nameEdit_(0)
     , polCombo_(0)
     , sigmaSpin_(0)
@@ -34,7 +37,6 @@ HrrpPage::HrrpPage(SharedDataSession *session, QWidget *parent)
     , cancelBtn_(0)
     , log_(0)
     , plot_(0)
-    , outDirUserEdited_(false)
     , thread_(0)
     , worker_(0)
 {
@@ -43,34 +45,45 @@ HrrpPage::HrrpPage(SharedDataSession *session, QWidget *parent)
     root->setContentsMargins(10, 10, 10, 10);
     root->setSpacing(8);
 
-    auto *pathBox = new QGroupBox(QStringLiteral("输出路径"), this);
+    auto *pathBox = new QGroupBox(QStringLiteral("数据路径"), this);
     auto *pathLay = new QVBoxLayout(pathBox);
     pathLay->setSpacing(6);
-    outEdit_ = new QLineEdit(pathBox);
-    outEdit_->setMinimumHeight(28);
-    outEdit_->setPlaceholderText(QStringLiteral("数据文件夹/处理结果_HRRP_<极化>"));
-    auto *outBrowse = new QPushButton(QStringLiteral("浏览…"), pathBox);
-    outBrowse->setFixedWidth(72);
-    auto *outRow = new QHBoxLayout;
-    outRow->addWidget(new QLabel(QStringLiteral("输出目录"), pathBox));
-    outRow->addWidget(outEdit_, 1);
-    outRow->addWidget(outBrowse);
-    pathLay->addLayout(outRow);
+    folderEdit_ = new QLineEdit(pathBox);
+    folderEdit_->setMinimumHeight(28);
+    folderEdit_->setPlaceholderText(QStringLiteral("选择含 *_L0_*.dat 的目录"));
+    auto *folderBrowse = new QPushButton(QStringLiteral("浏览…"), pathBox);
+    folderBrowse->setFixedWidth(72);
+    auto *folderRow = new QHBoxLayout;
+    folderRow->addWidget(new QLabel(QStringLiteral("数据文件夹"), pathBox));
+    folderRow->addWidget(folderEdit_, 1);
+    folderRow->addWidget(folderBrowse);
+    pathLay->addLayout(folderRow);
+    outDir_ = new OutDirField(this);
+    pathLay->addLayout(outDir_->createRow(pathBox));
+    outDir_->setPlaceholderHint(QStringLiteral("数据文件夹"), QStringLiteral("HRRP_<极化>"));
     root->addWidget(pathBox);
 
     auto *split = new QSplitter(Qt::Horizontal, this);
     split->setChildrenCollapsible(false);
 
     auto *left = new QWidget(split);
-    left->setMinimumWidth(300);
-    left->setMaximumWidth(420);
+    left->setMinimumWidth(480);
+    left->setStyleSheet(QStringLiteral(
+        "QComboBox,QSpinBox,QDoubleSpinBox,QLineEdit,QPushButton{min-height:30px;}"
+        "QGroupBox{font-weight:600; padding-top:8px;}"));
+    left->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     auto *leftLay = new QVBoxLayout(left);
-    leftLay->setContentsMargins(0, 0, 6, 0);
+    leftLay->setContentsMargins(10, 4, 10, 4);
+    leftLay->setSpacing(10);
 
     auto *paramBox = new QGroupBox(QStringLiteral("处理参数"), left);
     auto *form = new QFormLayout(paramBox);
-    form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
     form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    form->setHorizontalSpacing(12);
+    form->setVerticalSpacing(8);
+    form->setContentsMargins(8, 10, 8, 8);
     nameEdit_ = new QLineEdit(QStringLiteral("目标"), paramBox);
     form->addRow(QStringLiteral("目标/背景名称"), nameEdit_);
     polCombo_ = new QComboBox(paramBox);
@@ -84,7 +97,7 @@ HrrpPage::HrrpPage(SharedDataSession *session, QWidget *parent)
     cropSpin_ = new QSpinBox(paramBox);
     cropSpin_->setRange(256, 65536);
     cropSpin_->setValue(8192);
-    form->addRow(QStringLiteral("裁剪点数"), cropSpin_);
+    form->addRow(QStringLiteral("距离向点数"), cropSpin_);
     leftLay->addWidget(paramBox);
 
     auto *btns = new QHBoxLayout;
@@ -114,7 +127,11 @@ HrrpPage::HrrpPage(SharedDataSession *session, QWidget *parent)
     split->addWidget(right);
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
-    split->setSizes(QList<int>() << 340 << 1200);
+    split->setSizes(QList<int>() << 560 << 1000);
+    // 首帧再设一次，避免被右侧图最小宽度挤窄
+    QTimer::singleShot(0, split, [split]() {
+        split->setSizes(QList<int>() << 560 << qMax(800, split->width() - 560));
+    });
     root->addWidget(split, 1);
 
     thread_ = new QThread(this);
@@ -136,12 +153,16 @@ HrrpPage::HrrpPage(SharedDataSession *session, QWidget *parent)
     });
     thread_->start();
 
-    connect(outBrowse, &QPushButton::clicked, this, &HrrpPage::onBrowseOut);
+    connect(folderBrowse, &QPushButton::clicked, this, &HrrpPage::onBrowseFolder);
+    connect(folderEdit_, &QLineEdit::editingFinished, this, [this]() {
+        if (session_)
+            session_->setDataFolder(folderEdit_->text().trimmed());
+        else
+            outDir_->resetFromBase(folderEdit_->text().trimmed(),
+                                   hrrpResultTag(polCombo_->currentText()));
+    });
     connect(polCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         refreshDefaultOut();
-    });
-    connect(outEdit_, &QLineEdit::textEdited, this, [this](const QString &) {
-        outDirUserEdited_ = true;
     });
     connect(startBtn_, &QPushButton::clicked, this, &HrrpPage::onStart);
     connect(cancelBtn_, &QPushButton::clicked, this, &HrrpPage::onCancel);
@@ -161,37 +182,30 @@ HrrpPage::~HrrpPage()
     }
 }
 
-void HrrpPage::onDataFolderChanged(const QString &)
+void HrrpPage::onDataFolderChanged(const QString &path)
 {
-    outDirUserEdited_ = false;
-    refreshDefaultOut();
+    if (folderEdit_ && folderEdit_->text() != path)
+        folderEdit_->setText(path);
+    outDir_->resetFromBase(path, hrrpResultTag(polCombo_->currentText()));
 }
 
 void HrrpPage::refreshDefaultOut()
 {
-    const QString data = session_ ? session_->dataFolder().trimmed() : QString();
-    if (data.isEmpty())
-        return;
-    const QString autoPath = defaultResultDir(data, hrrpResultTag(polCombo_->currentText()));
-    if (!outDirUserEdited_ || outEdit_->text().trimmed().isEmpty()
-        || outEdit_->text().trimmed() == lastAutoOut_) {
-        outEdit_->setText(QDir::toNativeSeparators(autoPath));
-        lastAutoOut_ = outEdit_->text();
-        outDirUserEdited_ = false;
-    }
+    outDir_->refresh(folderEdit_ ? folderEdit_->text().trimmed() : QString(),
+                     hrrpResultTag(polCombo_->currentText()));
 }
 
-
-void HrrpPage::onBrowseOut()
+void HrrpPage::onBrowseFolder()
 {
-    const QString start = outEdit_->text().trimmed().isEmpty()
-                              ? (session_ ? session_->dataFolder() : QString())
-                              : outEdit_->text().trimmed();
-    const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("选择输出目录"), start);
-    if (!d.isEmpty()) {
-        outEdit_->setText(d);
-        outDirUserEdited_ = true;
-    }
+    const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("选择数据文件夹"),
+                                                        folderEdit_->text());
+    if (d.isEmpty())
+        return;
+    folderEdit_->setText(d);
+    if (session_)
+        session_->setDataFolder(d);
+    else
+        outDir_->resetFromBase(d, hrrpResultTag(polCombo_->currentText()));
 }
 
 void HrrpPage::setBusy(bool busy)
@@ -202,14 +216,16 @@ void HrrpPage::setBusy(bool busy)
 
 void HrrpPage::onStart()
 {
-    if (!session_ || session_->dataFolder().trimmed().isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("HRRP"), QStringLiteral("请先在顶部选择数据文件夹"));
+    if (folderEdit_->text().trimmed().isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("HRRP"), QStringLiteral("请先选择数据文件夹"));
         return;
     }
+    if (session_)
+        session_->setDataFolder(folderEdit_->text().trimmed());
     refreshDefaultOut();
     HrrpParams p;
-    p.dataFolder = session_->dataFolder().trimmed();
-    p.outDir = outEdit_->text().trimmed();
+    p.dataFolder = folderEdit_->text().trimmed();
+    p.outDir = outDir_->text();
     p.tgtName = nameEdit_->text().trimmed().isEmpty() ? QStringLiteral("目标") : nameEdit_->text().trimmed();
     p.pol = polCombo_->currentText();
     p.sigmaTheoryDb = sigmaSpin_->value();
@@ -232,13 +248,13 @@ void HrrpPage::onNeedCorner(const QVector<double> &R, const QVector<double> &pro
 {
     plot_->setData(R, profileDb);
     const double sug = (peakIdx >= 0 && peakIdx < R.size()) ? R[peakIdx] : 0;
-    log_->appendLog(QStringLiteral("请核对角反峰值（约 %.1f m）…").arg(sug));
+    log_->appendLog(QStringLiteral("请核对角反峰值（约 %1 m）…").arg(sug, 0, 'f', 1));
     raise();
     activateWindow();
     bool ok = false;
     const QString text = QInputDialog::getText(
         this, QStringLiteral("核对角反"),
-        QStringLiteral("自动峰值距离 %.1f m。直接回车确认，或输入正确距离(m)：").arg(sug),
+        QStringLiteral("自动峰值距离 %1 m。直接回车确认，或输入正确距离(m)：").arg(sug, 0, 'f', 1),
         QLineEdit::Normal, QString(), &ok);
     UserSelection sel;
     if (ok && !text.trimmed().isEmpty())

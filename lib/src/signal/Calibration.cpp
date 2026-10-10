@@ -34,7 +34,9 @@ void Calibration::cropAroundPeak(ComplexMatrix &data, std::vector<double> &profi
     if (data.nr <= cropN)
         return;
     const int half = cropN / 2;
-    int startG = peak - half;
+    // 与 MATLAB RCS_207 对齐：1-based startG = pk0-half+1 → 0-based start = peak-half+1
+    // 峰在裁剪窗内位于 0-based 下标 half-1（对应 MATLAB 窗内 1-based 下标 half）
+    int startG = peak - half + 1;
     startG = ibound(0, startG, data.nr - cropN);
     ComplexMatrix cropped;
     cropped.resize(cropN, data.np);

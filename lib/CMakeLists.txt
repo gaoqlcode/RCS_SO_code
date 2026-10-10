@@ -16,6 +16,9 @@ set(RCS_PROC_SOURCES
   src/hrrp/process_hrrp.cpp
   src/rcs/process_rcs.cpp
   src/cw_rcs/process_cw_rcs.cpp
+  src/sigma0/process_sigma0.cpp
+  src/l0_preview/process_l0_preview.cpp
+  src/sdk_util/process_sdk_util.cpp
   # 拼接入口始终编译（禁用时仅为 stub）
   src/mosaic/process_mosaic.cpp
 )
@@ -48,6 +51,9 @@ target_include_directories(rcs_proc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/hrrp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rcs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cw_rcs
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sigma0
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/l0_preview
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sdk_util
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mosaic
 )
 

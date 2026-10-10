@@ -2,6 +2,7 @@
 #define TYPES_H
 
 #include <QMetaType>
+#include <QRect>
 #include <QString>
 #include <QVector>
 #include <QPair>
@@ -47,6 +48,8 @@ struct UserSelection {
     int targetMode; // 1 点目标  2 扩展
     QVector<QPair<double, double> > extendedRanges;
     double cornerRangeOverrideM;
+    // 后向散射：全分辨率矩形（x=方位列, y=距离行, w/h）
+    QVector<QRect> rectRois;
 
     UserSelection() : targetMode(1), cornerRangeOverrideM(-1) {}
 };

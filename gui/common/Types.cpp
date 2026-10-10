@@ -1,4 +1,5 @@
 #include "Types.h"
+#include <QImage>
 
 void registerRcsMetaTypes()
 {
@@ -7,4 +8,5 @@ void registerRcsMetaTypes()
     qRegisterMetaType<UserSelection>("UserSelection");
     qRegisterMetaType<QVector<PickPoint> >("QVector<PickPoint>");
     qRegisterMetaType<QVector<double> >("QVector<double>");
+    qRegisterMetaType<QImage>("QImage");
 }

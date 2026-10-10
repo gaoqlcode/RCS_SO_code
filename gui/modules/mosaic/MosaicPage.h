@@ -14,6 +14,7 @@ class QComboBox;
 class QLabel;
 class LogProgressPanel;
 class FlattenPanel;
+class OutDirField;
 
 class MosaicPage : public QWidget {
     Q_OBJECT
@@ -36,7 +37,7 @@ private:
                               int rawNrHint, int rawNaHint);
 
     QLineEdit *inEdit_ = nullptr;
-    QLineEdit *outEdit_ = nullptr;
+    OutDirField *outDir_ = nullptr;
     QComboBox *modeCombo_ = nullptr;
     QCheckBox *flattenCheck_ = nullptr;
     QDoubleSpinBox *medSpin_ = nullptr;
@@ -47,8 +48,6 @@ private:
     LogProgressPanel *log_ = nullptr;
     QLabel *resultLabel_ = nullptr;
     FlattenPanel *flattenPanel_ = nullptr;
-    QString lastAutoOut_;
-    bool outDirUserEdited_ = false;
 
     QThread *thread_ = nullptr;
     MosaicWorker *worker_ = nullptr;

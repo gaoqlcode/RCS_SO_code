@@ -13,6 +13,7 @@ class QPushButton;
 class LogProgressPanel;
 class InteractivePlotWidget;
 class SharedDataSession;
+class OutDirField;
 
 class HrrpPage : public QWidget {
     Q_OBJECT
@@ -21,7 +22,7 @@ public:
     ~HrrpPage() override;
 
 private slots:
-    void onBrowseOut();
+    void onBrowseFolder();
     void onStart();
     void onCancel();
     void onDataFolderChanged(const QString &path);
@@ -33,7 +34,8 @@ private:
     void refreshDefaultOut();
 
     SharedDataSession *session_;
-    QLineEdit *outEdit_;
+    QLineEdit *folderEdit_;
+    OutDirField *outDir_;
     QLineEdit *nameEdit_;
     QComboBox *polCombo_;
     QDoubleSpinBox *sigmaSpin_;
@@ -42,8 +44,6 @@ private:
     QPushButton *cancelBtn_;
     LogProgressPanel *log_;
     InteractivePlotWidget *plot_;
-    QString lastAutoOut_;
-    bool outDirUserEdited_;
 
     QThread *thread_;
     HrrpWorker *worker_;
