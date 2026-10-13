@@ -26,6 +26,8 @@
 //   [6] 数据探查 / 路径约定
 //   [7] 成像 RAW 预览辅助（配合 [4]）
 //   [8] 大图拼接
+//   [10] 源 DAT → 四极化 L0 → 成像（可选，Linux；-DRCS_ENABLE_TOZERODATA）
+//       processZeroImage / processZeroImageFolder / processToZeroData
 // =============================================================================
 
 // ---------------------------------------------------------------------------
@@ -193,13 +195,29 @@ RCS_API bool prepareMosaicInputs(const std::string &inFolder, const std::string 
 
 #if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
 // ---------------------------------------------------------------------------
-// [10] ToZeroData — 源 DAT → 四极化 L0 DAT（可选 .sarrec；静态合入主库）
+// [10] 源 DAT → 四极化 L0 → 成像（一次调用完成两步）
+// 运行前提：MATLAB Runtime v9.3，以及随包 engine/for_testing
 // ---------------------------------------------------------------------------
 
 RCS_API bool processToZeroData(const ToZeroDataRequest &req, ToZeroDataResponse &resp, Callbacks &cb,
                                std::string *err = 0);
 RCS_API std::vector<std::string> toZeroDataOutputPaths(const std::string &outputBasePath);
 RCS_API std::string toZeroDataRecoveryPath(const std::string &outputBasePath);
+
+/** 先转四极化 L0（强制 .sarrec），再成像。只填 inputDirectory 时只成像。 */
+RCS_API bool processZeroImage(const ZeroImageRequest &req, ZeroImageResponse &resp, Callbacks &cb,
+                              std::string *err = 0);
+
+/** 由四极化文件路径推导同目录 .sarrec 路径 */
+RCS_API std::string zeroImageSidecarPath(const std::string &polarizedPath);
+
+/**
+ * 将源目录这一层的 DAT 全部转为四极化 L0（强制写 .sarrec），再对输出目录成像一次。
+ * 不进入子目录。以 _HH/_VV/_HV/_VH 结尾的文件名视为已是 L0，跳过。
+ * 任一转换失败则停止，不再成像。
+ */
+RCS_API bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderResponse &resp,
+                                    Callbacks &cb, std::string *err = 0);
 #endif // RCS_ENABLE_TOZERODATA
 
 #endif

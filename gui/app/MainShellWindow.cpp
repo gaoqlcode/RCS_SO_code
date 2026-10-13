@@ -30,7 +30,7 @@ MainShellWindow::MainShellWindow(QWidget *parent) : QMainWindow(parent)
 
     auto *tabs = new QTabWidget(central);
 #if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
-    tabs->addTab(new ToZeroPage(tabs), QStringLiteral("ToZeroData"));
+    tabs->addTab(new ToZeroPage(tabs), QStringLiteral("零级转换与成像"));
 #endif
     tabs->addTab(new L0PreviewPage(session_, tabs), QStringLiteral("原始数据预览"));
     tabs->addTab(new RcsPage(session_, tabs), QStringLiteral("RCS测量"));

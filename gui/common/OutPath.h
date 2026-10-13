@@ -64,7 +64,7 @@ inline QString mosaicResultTag()
 
 inline QString toZeroResultTag()
 {
-    return QStringLiteral("ToZero");
+    return QStringLiteral("零级成像");
 }
 
 inline QString resolveOutDir(const QString &userOut, const QString &baseFolder, const QString &tag)

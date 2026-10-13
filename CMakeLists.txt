@@ -11,13 +11,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 option(RCS_BUILD_GUI "Build Qt GUI application" ON)
 option(RCS_BUILD_CLI "Build rcs_cli" ON)
 option(RCS_BUILD_TESTS "Build tests" ON)
-# ToZeroData：仅 Linux；可用 -DRCS_ENABLE_TOZERODATA=OFF 关闭
-option(RCS_ENABLE_TOZERODATA "Enable ToZeroData (Linux only; static libToZeroDataCpp11.a)" ON)
+# 零级成像（ZeroDataImageHandle）：仅 Linux；可用 -DRCS_ENABLE_TOZERODATA=OFF 关闭
+option(RCS_ENABLE_TOZERODATA "Enable ZeroDataImageHandle (Linux only; static libZeroDataImageHandleCpp11.a)" ON)
 if(WIN32)
   if(RCS_ENABLE_TOZERODATA)
-    message(STATUS "ToZeroData 不支持 Windows，已强制 RCS_ENABLE_TOZERODATA=OFF")
+    message(STATUS "零级成像不支持 Windows，已强制 RCS_ENABLE_TOZERODATA=OFF")
   endif()
-  set(RCS_ENABLE_TOZERODATA OFF CACHE BOOL "Enable ToZeroData (Linux only)" FORCE)
+  set(RCS_ENABLE_TOZERODATA OFF CACHE BOOL "Enable ZeroDataImageHandle (Linux only)" FORCE)
 endif()
 
 # GUI/CLI 链 sdk/（需当前平台已有库：Linux .so / Windows .dll）。

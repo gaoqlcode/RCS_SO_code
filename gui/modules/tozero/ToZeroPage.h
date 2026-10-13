@@ -6,6 +6,7 @@
 #include "ToZeroWorker.h"
 
 class QLineEdit;
+class QSpinBox;
 class QCheckBox;
 class QPushButton;
 class QLabel;
@@ -20,19 +21,37 @@ public:
 
 private slots:
     void onBrowseSource();
+    void onBrowseEngine();
+    void refreshDefaultOut();
+    QString buildOutputBasePath() const;
     void onStart();
     void onCancel();
     void onReady(const ToZeroResultQt &r);
 
 private:
     void setBusy(bool busy);
-    void refreshDefaultOut();
-    QString buildOutputBasePath() const;
+    int spinValue(QSpinBox *box) const;
 
     QLineEdit *srcEdit_;
     OutDirField *outDir_;
     QLineEdit *baseNameEdit_;
-    QCheckBox *saveRecCheck_;
+    QLineEdit *engineEdit_;
+    QLineEdit *mcrEdit_;
+    QSpinBox *beginSpin_;
+    QSpinBox *deltaSpin_;
+    QSpinBox *lastSpin_;
+    QSpinBox *numSpin_;
+    QSpinBox *offsetSpin_;
+    QSpinBox *testSpin_;
+    QSpinBox *aperSpin_;
+    QSpinBox *tarYSpin_;
+    QSpinBox *iq1Spin_;
+    QSpinBox *iq2Spin_;
+    QSpinBox *rangeSpin_;
+    QSpinBox *errStartSpin_;
+    QSpinBox *errLenSpin_;
+    QSpinBox *timeoutSpin_;
+    QCheckBox *engineCheck_;
     QPushButton *startBtn_;
     QPushButton *cancelBtn_;
     LogProgressPanel *log_;

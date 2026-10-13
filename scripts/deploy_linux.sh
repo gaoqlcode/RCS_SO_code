@@ -60,6 +60,20 @@ fi
 cp -a "${rcs_sos[@]}" "$OUT/lib/"
 shopt -u nullglob
 
+# 零级成像引擎（MATLAB 独立程序）。库会查找 lib 旁的 ../engine/for_testing
+ENG="$ROOT/3rdparty/zerodataimagehandle/engine/for_testing"
+if [[ -d "$ENG" ]]; then
+  mkdir -p "$OUT/engine"
+  cp -a "$ENG" "$OUT/engine/"
+fi
+
+# MATLAB Runtime v9.3 离线安装器，供客户在目标机安装
+MCR_RT="$ROOT/SAR-SDK/runtime"
+if [[ -f "$MCR_RT/MyAppInstaller_mcr.install" ]]; then
+  mkdir -p "$OUT/runtime"
+  cp -a "$MCR_RT/." "$OUT/runtime/"
+fi
+
 # ---- 收集 ldd 依赖（跳过系统 libc / 显卡驱动等）----
 is_skip_lib() {
   local p="$1" b
@@ -173,11 +187,14 @@ cat > "$OUT/README.txt" <<EOF
   bin/RCS          GUI
   bin/rcs_cli      命令行
   lib/             librcs_proc + Qt 等运行时库
+  engine/          零级成像后处理程序
+  runtime/         MATLAB Runtime v9.3 离线安装器（bash runtime/install_mcr.sh）
   plugins/         Qt 平台插件
   run_RCS.sh       推荐用此启动 GUI
   run_cli.sh       启动 CLI
 
 用法:
+  bash runtime/install_mcr.sh    # 目标机首次使用零级成像前执行
   ./run_RCS.sh
   ./run_cli.sh --help
 

@@ -4,7 +4,7 @@
 #   ./scripts/build_linux.sh
 #   ./scripts/build_linux.sh --clean          # wipe build_linux first
 #   ./scripts/build_linux.sh --no-gui         # lib + cli only
-#   ./scripts/build_linux.sh --no-tozero      # 关闭 ToZeroData
+#   ./scripts/build_linux.sh --no-tozero      # 关闭零级成像
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

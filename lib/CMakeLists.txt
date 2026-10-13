@@ -26,7 +26,10 @@ set(RCS_PROC_SOURCES
 )
 
 if(RCS_ENABLE_TOZERODATA)
-  list(APPEND RCS_PROC_SOURCES src/tozerodata/process_tozerodata.cpp)
+  list(APPEND RCS_PROC_SOURCES
+    src/tozerodata/process_tozerodata.cpp
+    src/tozerodata/process_zeroimage.cpp
+  )
 endif()
 
 add_library(rcs_proc SHARED ${RCS_PROC_SOURCES})
@@ -56,12 +59,22 @@ target_include_directories(rcs_proc
 target_link_libraries(rcs_proc PRIVATE TIFF::TIFF)
 
 if(RCS_ENABLE_TOZERODATA)
+  set(ZDI_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/zerodataimagehandle")
+  set(ZDI_A "${ZDI_ROOT}/lib/libZeroDataImageHandleCpp11.a")
+  set(ZDI_ENGINE "${ZDI_ROOT}/engine/for_testing")
+  if(NOT EXISTS "${ZDI_A}")
+    message(FATAL_ERROR
+      "RCS_ENABLE_TOZERODATA=ON 但缺少静态库: ${ZDI_A}\n"
+      "请放入 libZeroDataImageHandleCpp11.a / zerodataimagehandle.h，或关掉: -DRCS_ENABLE_TOZERODATA=OFF")
+  endif()
+  if(NOT EXISTS "${ZDI_ROOT}/include/zerodataimagehandle.h")
+    message(FATAL_ERROR "缺少 ${ZDI_ROOT}/include/zerodataimagehandle.h")
+  endif()
+
   set(TOZERODATA_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/tozerodata")
   set(TOZERODATA_A "${TOZERODATA_ROOT}/lib/libToZeroDataCpp11.a")
   if(NOT EXISTS "${TOZERODATA_A}")
-    message(FATAL_ERROR
-      "RCS_ENABLE_TOZERODATA=ON 但缺少静态库: ${TOZERODATA_A}\n"
-      "请放入 libToZeroDataCpp11.a / tozerodata.h，或关掉: -DRCS_ENABLE_TOZERODATA=OFF")
+    message(FATAL_ERROR "缺少源 DAT 转 L0 静态库: ${TOZERODATA_A}")
   endif()
   if(NOT EXISTS "${TOZERODATA_ROOT}/include/tozerodata.h")
     message(FATAL_ERROR "缺少 ${TOZERODATA_ROOT}/include/tozerodata.h")
@@ -72,18 +85,27 @@ if(RCS_ENABLE_TOZERODATA)
     IMPORTED_LOCATION "${TOZERODATA_A}"
     INTERFACE_INCLUDE_DIRECTORIES "${TOZERODATA_ROOT}/include"
   )
+  add_library(ZeroDataImageHandleCpp11 STATIC IMPORTED GLOBAL)
+  set_target_properties(ZeroDataImageHandleCpp11 PROPERTIES
+    IMPORTED_LOCATION "${ZDI_A}"
+    INTERFACE_INCLUDE_DIRECTORIES "${ZDI_ROOT}/include"
+  )
 
   target_include_directories(rcs_proc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tozerodata
     ${TOZERODATA_ROOT}/include
+    ${ZDI_ROOT}/include
   )
-  # --whole-archive：把 .a 打进 librcs_proc.so
+  # --whole-archive：转换库与成像库都打进 librcs_proc.so；客户只链 -lrcs_proc
   target_link_libraries(rcs_proc PRIVATE
-    -Wl,--whole-archive ToZeroDataCpp11 -Wl,--no-whole-archive)
+    -Wl,--whole-archive ToZeroDataCpp11 ZeroDataImageHandleCpp11 -Wl,--no-whole-archive
+    ${CMAKE_DL_LIBS})
   target_compile_definitions(rcs_proc PUBLIC RCS_ENABLE_TOZERODATA=1)
-  message(STATUS "ToZeroData: ON (static link ${TOZERODATA_A})")
+  target_compile_definitions(rcs_proc PRIVATE "RCS_ZDI_ENGINE_DIR=\"${ZDI_ENGINE}\"")
+  message(STATUS "ZeroDataImageHandle: ON (static link ${ZDI_A})")
+  message(STATUS "ZeroDataImageHandle engine: ${ZDI_ENGINE}")
 else()
-  message(STATUS "ToZeroData: OFF")
+  message(STATUS "ZeroDataImageHandle: OFF")
 endif()
 
 if(UNIX AND NOT APPLE)

@@ -59,7 +59,7 @@ fi
 if grep -qE '\brun(Hrrp|Rcs|CwRcs|Sigma0|L0Preview)\b' "$SDK/include/rcs/rcs_api.h"; then
   echo "警告: 客户头文件仍含已移除的 run* 一键接口" >&2
 fi
-echo "对外头文件: $SDK/include/rcs （完整分组 [0]~[9]，含大图拼接与 RCS 像定标）"
+echo "对外头文件: $SDK/include/rcs （完整分组 [0]~[10]，含大图拼接、RCS 像定标与零级成像）"
 
 if command -v ldd >/dev/null; then
   echo

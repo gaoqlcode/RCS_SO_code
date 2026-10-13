@@ -13,13 +13,13 @@ std::string stageName(ToZeroData::ConversionStage s)
     case ToZeroData::ConversionStage::Scanning:
         return "扫描源数据";
     case ToZeroData::ConversionStage::Converting:
-        return "转换中";
+        return "转换为四极化 L0";
     case ToZeroData::ConversionStage::Committing:
-        return "提交输出";
+        return "提交 L0 输出";
     case ToZeroData::ConversionStage::SavingRecovery:
         return "写还原信息";
     }
-    return "处理中";
+    return "转换中";
 }
 
 } // namespace
@@ -66,7 +66,7 @@ bool processToZeroData(const ToZeroDataRequest &req, ToZeroDataResponse &resp, C
         if (cb.onError && !r.error.empty())
             cb.onError(r.error);
         if (err)
-            *err = r.error.empty() ? "ToZeroData 转换失败" : r.error;
+            *err = r.error.empty() ? "源 DAT 转 L0 失败" : r.error;
         return false;
     }
 
@@ -76,7 +76,6 @@ bool processToZeroData(const ToZeroDataRequest &req, ToZeroDataResponse &resp, C
     resp.recoveryPath = r.recoveryPath;
     resp.recoveryBytes = r.recoveryBytes;
     resp.sourceSha256 = r.sourceSha256;
-    resp.outputs.clear();
     resp.outputs.reserve(r.outputs.size());
     for (size_t i = 0; i < r.outputs.size(); ++i) {
         ToZeroDataPolarizationOut o;
@@ -87,7 +86,7 @@ bool processToZeroData(const ToZeroDataRequest &req, ToZeroDataResponse &resp, C
         resp.outputs.push_back(o);
     }
     if (cb.onProgress)
-        cb.onProgress(100, "ToZeroData 完成");
+        cb.onProgress(100, "四极化 L0 转换完成");
     return true;
 }
 

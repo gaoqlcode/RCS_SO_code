@@ -26,7 +26,8 @@
 //   [6] 数据探查 / 路径约定
 //   [7] 成像 RAW 预览辅助（配合 [4]）
 //   [8] 大图拼接
-//   [10] ToZeroData（可选，Linux；-DRCS_ENABLE_TOZERODATA）
+//   [10] 源 DAT → 四极化 L0 → 成像（可选，Linux；-DRCS_ENABLE_TOZERODATA）
+//       processZeroImage / processZeroImageFolder / processToZeroData
 // =============================================================================
 
 // ---------------------------------------------------------------------------
@@ -193,11 +194,12 @@ RCS_API bool prepareMosaicInputs(const std::string &inFolder, const std::string 
 
 #if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
 // ---------------------------------------------------------------------------
-// [10] ToZeroData — 源 DAT → 四极化 L0 DAT（可选 .sarrec；静态合入主库）
+// [10] 源 DAT → 四极化 L0 → 成像（两步都静态合入主库，一次调用完成）
 // 回调：onProgress / onMessage / isCancelled（建议）
+// 运行前提：MATLAB Runtime v9.3，以及随包 engine/for_testing
 // ---------------------------------------------------------------------------
 
-/** 将源 DAT 转为 HH/VV/HV/VH 四个 L0 DAT；可选写 .sarrec。同步阻塞。 */
+/** 仅把源 DAT 转为 HH/VV/HV/VH。saveRecovery=true 时写 .sarrec。 */
 RCS_API bool processToZeroData(const ToZeroDataRequest &req, ToZeroDataResponse &resp, Callbacks &cb,
                                std::string *err = 0);
 
@@ -206,6 +208,27 @@ RCS_API std::vector<std::string> toZeroDataOutputPaths(const std::string &output
 
 /** 由输出基路径派生 .sarrec 路径 */
 RCS_API std::string toZeroDataRecoveryPath(const std::string &outputBasePath);
+
+/**
+ * 先将源 DAT 转为四极化 L0（强制写 .sarrec），再对该目录成像。
+ * sourcePath 与 outputBasePath 同时给出时走完整流程；只填 inputDirectory 时只成像。
+ * 同步阻塞。客户只链 -lrcs_proc。
+ */
+RCS_API bool processZeroImage(const ZeroImageRequest &req, ZeroImageResponse &resp, Callbacks &cb,
+                              std::string *err = 0);
+
+/** 由四极化文件路径推导同目录 .sarrec 路径（去掉 _HH 等后缀） */
+RCS_API std::string zeroImageSidecarPath(const std::string &polarizedPath);
+
+/**
+ * 将源目录这一层的 DAT 全部转为四极化 L0（强制写 .sarrec），再对输出目录成像一次。
+ * 不进入子目录。文件名（不含扩展名）以 _HH/_VV/_HV/_VH 结尾的视为已是 L0，跳过。
+ * 每个源文件的输出基路径为 outputDirectory/<原名>_L0.dat。
+ * 任一转换失败则停止，不再成像；已完成的 L0 留在 resp.sources。
+ * 同步阻塞。客户只链 -lrcs_proc。
+ */
+RCS_API bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderResponse &resp,
+                                    Callbacks &cb, std::string *err = 0);
 #endif // RCS_ENABLE_TOZERODATA
 
 #endif

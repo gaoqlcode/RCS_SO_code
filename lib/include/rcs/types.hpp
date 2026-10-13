@@ -471,12 +471,13 @@ struct MosaicResponse {
 };
 
 #if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
-// ===== [10] ToZeroData：源 DAT → 四极化 L0 DAT（+可选 .sarrec）；仅 Linux 可选编译 =====
+// ===== [10] 源 DAT → 四极化 L0 → 成像；仅 Linux 可选编译 =====
 
+/** 源 DAT 转四极化 L0 的请求。成像流程会强制写 .sarrec。 */
 struct ToZeroDataRequest {
     std::string sourcePath;     ///< 源 DAT（UTF-8）
     std::string outputBasePath; ///< 输出基路径，如 .../source_L0.dat（派生 HH/VV/HV/VH）
-    bool saveRecovery;          ///< true=额外写 .sarrec 还原信息；默认 false
+    bool saveRecovery;          ///< true=额外写 .sarrec；默认 false。成像前必须为 true
 
     ToZeroDataRequest() : saveRecovery(false) {}
 };
@@ -494,13 +495,153 @@ struct ToZeroDataResponse {
     std::uint64_t skippedRecords;
     std::uint64_t outputBytes; ///< 仅四个 DAT 合计
     std::vector<ToZeroDataPolarizationOut> outputs;
-    std::string recoveryPath; ///< saveRecovery 且成功时非空
+    std::string recoveryPath;
     std::uint64_t recoveryBytes;
     std::string sourceSha256;
     ToZeroDataResponse()
         : validRecords(0), skippedRecords(0), outputBytes(0), recoveryBytes(0)
     {
     }
+};
+
+/** Para.ini 的 14 项成像参数。文件个数至少为 2。 */
+struct ZeroImageParameters {
+    int beginId;       ///< 起始文件编号；默认 30
+    int deltaNum;      ///< 间隔文件数目；默认 120
+    int lastFileId;    ///< 最后一个文件编号；默认 6000
+    int rangeOffset;   ///< 最近成像作用距离偏移值；默认 100
+    int fileNum;       ///< 文件个数（至少 2）；默认 16
+    int testMode;      ///< 测试模式；默认 0
+    int aperLen;       ///< 误差估计点数；默认 256
+    int tarPosY;       ///< 目标所在位置（y)；默认 1711
+    int iqOrderBand1;  ///< 第一个波段的 IQ 顺序；默认 1
+    int iqOrderBand2;  ///< 第二个波段的 IQ 顺序；默认 1
+    int rangePoints;   ///< 距离向点数；默认 8192
+    int errEstStart;   ///< 误差估计开始点；默认 500
+    int errEstLength;  ///< 误差估计长度；默认 500
+
+    ZeroImageParameters()
+        : beginId(30)
+        , deltaNum(120)
+        , lastFileId(6000)
+        , rangeOffset(100)
+        , fileNum(16)
+        , testMode(0)
+        , aperLen(256)
+        , tarPosY(1711)
+        , iqOrderBand1(1)
+        , iqOrderBand2(1)
+        , rangePoints(8192)
+        , errEstStart(500)
+        , errEstLength(500)
+    {
+    }
+};
+
+/** processZeroImage 请求。先把源 DAT 转为四极化 L0，再对该目录成像。 */
+struct ZeroImageRequest {
+    std::string sourcePath;         ///< 源 DAT。与 outputBasePath 同时给出时先转 L0
+    std::string outputBasePath;     ///< L0 输出基路径，如 .../source_L0.dat
+    std::string inputDirectory;     ///< 已有 L0 目录。空则使用本次 L0 产物所在目录；图像写回该目录
+    ZeroImageParameters parameters; ///< 成像参数；须与数据编号匹配
+    std::string engineDirectory;    ///< 引擎目录（含 run_*.sh）；空=自动查找
+    std::string engineExecutable;   ///< 引擎可执行文件或 run_*.sh；空=在引擎目录中查找
+    std::string mcrRoot;            ///< MATLAB Runtime v9.3 根目录；空=/usr/local/MATLAB/MATLAB_Runtime/v93
+    std::string mcrCacheRoot;       ///< MCR 缓存目录；空=沿用 ~/.mcrCache9.3
+    int timeoutMs;                  ///< 引擎超时（毫秒）；0=不限制
+    bool requireEngine;             ///< false=只还原、不启动引擎
+    bool keepWorkspace;             ///< true=保留内部工作目录（调试）
+    int kind;                       ///< 0=SAR（当前可用），1=ISAR（需另提供引擎）
+
+    ZeroImageRequest() : timeoutMs(0), requireEngine(true), keepWorkspace(false), kind(0) {}
+};
+
+/** 回写到输入目录的产物 */
+struct ZeroImagePublishedFile {
+    std::string path;
+    std::string suffix;
+    std::uint64_t bytes;
+    ZeroImagePublishedFile() : bytes(0) {}
+};
+
+/** 还原出的一组原始数据 */
+struct ZeroImageRestoredInput {
+    std::string sidecar;
+    std::string originalName;
+    std::string sourceSha256;
+    std::uint64_t originalSize;
+    ZeroImageRestoredInput() : originalSize(0) {}
+};
+
+/** processZeroImage 输出：前半是 L0 转换结果，后半是成像结果 */
+struct ZeroImageResponse {
+    std::uint64_t validRecords;
+    std::uint64_t skippedRecords;
+    std::uint64_t l0Bytes;
+    std::vector<ToZeroDataPolarizationOut> l0Outputs;
+    std::string recoveryPath;
+    std::uint64_t recoveryBytes;
+    std::string sourceSha256;
+    int exitCode; ///< 后处理程序退出码；未启动时为 -1
+    std::uint64_t restoredBytes;
+    std::vector<ZeroImageRestoredInput> inputs;
+    std::vector<ZeroImagePublishedFile> publishedFiles;
+    std::vector<std::string> warnings;
+    std::string jobId;
+    std::string recordPath; ///< 任务 JSON
+    std::string configPath; ///< 本次 Para.ini
+    std::string logPath;    ///< 任务日志
+    ZeroImageResponse()
+        : validRecords(0)
+        , skippedRecords(0)
+        , l0Bytes(0)
+        , recoveryBytes(0)
+        , exitCode(-1)
+        , restoredBytes(0)
+    {
+    }
+};
+
+/** 文件夹批量转换中的一个源 DAT 及其 L0 结果 */
+struct ZeroImageFolderSource {
+    std::string sourcePath;     ///< 源 DAT
+    std::string outputBasePath; ///< 本次 L0 基路径，如 .../name_L0.dat
+    ToZeroDataResponse result;
+};
+
+/**
+ * processZeroImageFolder 请求。
+ * 将该目录这一层的源 DAT 全部转为四极化 L0（强制 .sarrec），再对输出目录成像一次。
+ */
+struct ZeroImageFolderRequest {
+    std::string sourceDirectory;    ///< 原始 DAT 所在目录（不进入子目录）
+    std::string outputDirectory;    ///< 全部 L0 与 .sarrec 写入此目录，图像也写回此处
+    ZeroImageParameters parameters; ///< 成像参数；须与还原出的 SAR_Raw 编号匹配
+    std::string engineDirectory;    ///< 引擎目录（含 run_*.sh）；空=自动查找
+    std::string engineExecutable;   ///< 引擎可执行文件或 run_*.sh；空=在引擎目录中查找
+    std::string mcrRoot;            ///< MATLAB Runtime v9.3 根目录；空=/usr/local/MATLAB/MATLAB_Runtime/v93
+    std::string mcrCacheRoot;       ///< MCR 缓存目录；空=沿用 ~/.mcrCache9.3
+    int timeoutMs;                  ///< 引擎超时（毫秒）；0=不限制
+    bool requireEngine;             ///< false=只还原、不启动引擎
+    bool keepWorkspace;             ///< true=保留内部工作目录（调试）
+    int kind;                       ///< 0=SAR（当前可用），1=ISAR（需另提供引擎）
+
+    ZeroImageFolderRequest() : timeoutMs(0), requireEngine(true), keepWorkspace(false), kind(0) {}
+};
+
+/** processZeroImageFolder 输出：每个源文件的 L0，以及一次成像的产物 */
+struct ZeroImageFolderResponse {
+    std::vector<ZeroImageFolderSource> sources;
+    int exitCode; ///< 后处理程序退出码；未启动时为 -1
+    std::uint64_t restoredBytes;
+    std::vector<ZeroImageRestoredInput> inputs;
+    std::vector<ZeroImagePublishedFile> publishedFiles;
+    std::vector<std::string> warnings;
+    std::string jobId;
+    std::string recordPath;
+    std::string configPath;
+    std::string logPath;
+    ZeroImageFolderResponse() : exitCode(-1), restoredBytes(0) {}
 };
 #endif // RCS_ENABLE_TOZERODATA
 

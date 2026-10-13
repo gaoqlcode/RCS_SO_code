@@ -33,7 +33,7 @@ RCS_SO_code/
 ./scripts/build_linux.sh
 # ./scripts/build_linux.sh --clean      # 清 build_linux 重来
 # ./scripts/build_linux.sh --no-gui     # 只编库和 cli（仍会打 deploy）
-# ./scripts/build_linux.sh --no-tozero  # 关闭 ToZeroData（Windows 本就不编）
+# ./scripts/build_linux.sh --no-tozero  # 关闭零级成像（Windows 本就不编）
 ```
 
 发布运行（整目录拷贝）：
@@ -58,7 +58,7 @@ cd build_linux && ctest --output-on-failure
 | `RCS_USE_SDK` | **OFF** | ON 时 GUI/CLI 链 `sdk/`（需当前平台已有库）。Windows 一键脚本固定 OFF |
 | `RCS_SDK_ROOT` | `sdk/` | SDK 根目录 |
 | `RCS_BUILD_GUI` | ON | Qt 界面 |
-| `RCS_ENABLE_TOZERODATA` | **ON**（Linux） | ToZeroData：静态合入 `librcs_proc`；**Windows 强制 OFF**；可用 `-DRCS_ENABLE_TOZERODATA=OFF` 或 `build_linux.sh --no-tozero` 关闭 |
+| `RCS_ENABLE_TOZERODATA` | **ON**（Linux） | 源 DAT 转 L0 并成像。运行还需 MATLAB Runtime v9.3（客户包 `SAR-SDK/runtime`，`bash runtime/install_mcr.sh`）与 `engine/for_testing` |
 | `RCS_TIFF_PREFER_STATIC` | ON | 静态链 libtiff（完整库含拼接，需 libtiff） |
 
 ```bash
