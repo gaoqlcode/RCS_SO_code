@@ -44,9 +44,7 @@ static QFont pickUiFont()
 }
 
 Q_DECLARE_METATYPE(std::vector<std::complex<double> >)
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
 Q_DECLARE_METATYPE(MosaicResult)
-#endif
 
 int main(int argc, char *argv[])
 {
@@ -62,9 +60,7 @@ int main(int argc, char *argv[])
 
     registerRcsMetaTypes();
     qRegisterMetaType<std::vector<std::complex<double> >>("std::vector<std::complex<double> >");
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
     qRegisterMetaType<MosaicResult>("MosaicResult");
-#endif
     qRegisterMetaType<CwRcsResultQt>("CwRcsResultQt");
 
     app.setFont(pickUiFont());

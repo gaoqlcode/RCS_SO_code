@@ -32,8 +32,8 @@ RCS_SO_code/
 # 一键：编 rcs_proc → sdk/lib → GUI/CLI → deploy/linux_*（可发布运行包）
 ./scripts/build_linux.sh
 # ./scripts/build_linux.sh --clean      # 清 build_linux 重来
-# ./scripts/build_linux.sh --no-mosaic  # 关拼接
 # ./scripts/build_linux.sh --no-gui     # 只编库和 cli（仍会打 deploy）
+# ./scripts/build_linux.sh --no-tozero  # 关闭 ToZeroData（Windows 本就不编）
 ```
 
 发布运行（整目录拷贝）：
@@ -55,11 +55,11 @@ cd build_linux && ctest --output-on-failure
 
 | 选项 | 默认 | 说明 |
 |------|------|------|
-| `RCS_USE_SDK` | **OFF** | ON 时 GUI/CLI 链 `sdk/`（需当前平台已有库），拼接关闭。Windows 一键脚本固定 OFF |
+| `RCS_USE_SDK` | **OFF** | ON 时 GUI/CLI 链 `sdk/`（需当前平台已有库）。Windows 一键脚本固定 OFF |
 | `RCS_SDK_ROOT` | `sdk/` | SDK 根目录 |
 | `RCS_BUILD_GUI` | ON | Qt 界面 |
-| `RCS_ENABLE_MOSAIC` | 仅 `RCS_USE_SDK=OFF` 且有静态 tiff 时 ON | 大场景拼接 |
-| `RCS_TIFF_PREFER_STATIC` | ON | 静态链 libtiff，SDK 客户无需 `libtiff5` |
+| `RCS_ENABLE_TOZERODATA` | **ON**（Linux） | ToZeroData：静态合入 `librcs_proc`；**Windows 强制 OFF**；可用 `-DRCS_ENABLE_TOZERODATA=OFF` 或 `build_linux.sh --no-tozero` 关闭 |
+| `RCS_TIFF_PREFER_STATIC` | ON | 静态链 libtiff（完整库含拼接，需 libtiff） |
 
 ```bash
 # 界面/命令行走 SDK（需先有 sdk/lib）
@@ -91,21 +91,18 @@ set PATH=C:\Qt\Qt5.12.8\5.12.8\mingw73_64\bin;C:\Qt\Qt5.12.8\Tools\mingw730_64\b
 cd RCS_SO_code
 rmdir /s /q build_win
 cmake -S . -B build_win -G "MinGW Makefiles" ^
-  -DCMAKE_PREFIX_PATH=C:\Qt\Qt5.12.8\5.12.8\mingw73_64 ^
-  -DRCS_ENABLE_MOSAIC=ON
+  -DCMAKE_PREFIX_PATH=C:\Qt\Qt5.12.8\5.12.8\mingw73_64
 cmake --build build_win -j
 ```
 
-配置成功时应看到：`Using bundled libtiff: 3rdparty/install/mingw73_64`、`Mosaic ENABLED`。
-
-仅库/不要拼接时可 `-DRCS_ENABLE_MOSAIC=OFF`（可不依赖 TIFF）。MSVC 需另备 libtiff（如 vcpkg），且 GUI 要用对应的 Qt msvc 套件。
+配置成功时应看到：`Using bundled libtiff` / `Full library (mosaic ON, ...)`。完整库始终含大图拼接，需 libtiff。MSVC 需另备 libtiff（如 vcpkg），且 GUI 要用对应的 Qt msvc 套件。
 
 ## 界面用法
 
 1. 顶部**一次**选择含 `*_L0_*.dat` 的数据文件夹  
 2. 在 **RCS测量 / HRRP一维距离像 / 点频RCS** 各页填参数并开始（共用同一输入目录）  
 3. **后向散射系数**：本页选择已成像 `uint16` LE `.raw`，交互框选噪声/角反/地物  
-4. 拼接（仅 `RCS_ENABLE_MOSAIC=ON`）：独立 Tab，本页选择 TIFF/RAW 图目录  
+4. 大场景拼接：独立 Tab，本页选择 TIFF/RAW 图目录  
 
 ## 终端用法
 
@@ -146,11 +143,12 @@ export LD_LIBRARY_PATH=$PWD/build_linux/lib:$LD_LIBRARY_PATH
 头文件：`lib/include/rcs/rcs_api.h`
 
 - `processHrrp` / `processRcs` / `processCwRcs`：文件夹入参字段统一（`dataFolder/pol/outDir/...`）
-- `processSigma0`：已成像 RAW → 后向散射 `.cs`（SDK 已开放）
-- `processMosaic` 等：默认禁用（SDK 客户头不含）  
+- `processSigma0`：已成像 RAW → 后向散射 `.cs`
+- `processMosaic` 等：大图拼接（完整库含 [8]）
+- 功能分组与交付取舍见 [`sdk/README.md`](sdk/README.md)  
 - 进度与选点：`Callbacks`；CLI / demo 用 `autoPick=true`
 
 
 ./3rdparty/scripts/build_linux_static.sh          # → install/linux_aarch64
-cmake -S . -B build -DRCS_ENABLE_MOSAIC=ON -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF
+cmake -S . -B build -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF
 cmake --build build -j && ./sdk/pack_sdk.sh

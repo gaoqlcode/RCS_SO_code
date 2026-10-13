@@ -8,7 +8,6 @@
 struct MosaicParams {
     QString inFolder;
     QString outFolder;
-    bool doFlatten = true;
     double medOut = 0.35;
     int mode = 0;
     QVector<int> offR;

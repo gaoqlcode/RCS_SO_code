@@ -19,13 +19,6 @@ target_include_directories(rcs_func PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/src/signal
   ${CMAKE_SOURCE_DIR}/lib/src/mosaic
 )
-if(RCS_ENABLE_MOSAIC)
-  target_compile_definitions(rcs_func PRIVATE RCS_ENABLE_MOSAIC=1)
-  target_compile_definitions(rcs_smoke PRIVATE RCS_ENABLE_MOSAIC=1)
-else()
-  target_compile_definitions(rcs_func PRIVATE RCS_ENABLE_MOSAIC=0)
-  target_compile_definitions(rcs_smoke PRIVATE RCS_ENABLE_MOSAIC=0)
-endif()
 
 add_test(NAME smoke COMMAND rcs_smoke)
 add_test(NAME func COMMAND rcs_func)

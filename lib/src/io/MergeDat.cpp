@@ -192,6 +192,7 @@ bool MergeDat::mergeFolder(const std::string &folder, const std::string &polSel,
         if (!headerWritten) {
             if (fwrite(&all[0], 1, static_cast<size_t>(lFH), fo) != static_cast<size_t>(lFH)) {
                 fclose(fo);
+                removeFile(outMergedPath);
                 if (err)
                     *err = "写入合并文件失败";
                 return false;
@@ -216,6 +217,7 @@ bool MergeDat::mergeFolder(const std::string &folder, const std::string &polSel,
             }
             if (fwrite(&all[0] + off, 1, static_cast<size_t>(need), fo) != static_cast<size_t>(need)) {
                 fclose(fo);
+                removeFile(outMergedPath);
                 if (err)
                     *err = "写入合并文件失败";
                 return false;
@@ -231,6 +233,7 @@ bool MergeDat::mergeFolder(const std::string &folder, const std::string &polSel,
     }
     fclose(fo);
     if (!headerWritten) {
+        removeFile(outMergedPath);
         if (err)
             *err = "合并失败";
         return false;

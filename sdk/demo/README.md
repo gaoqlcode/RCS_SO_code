@@ -23,4 +23,4 @@ cd ../gui_demo && cmake -S . -B build && cmake --build build -j
 ./build/rcs_gui_demo
 ```
 
-子目录里各有一份 README。接口说明见 `../接口使用说明.md`。
+子目录里各有一份 README。gui_demo 从零讲解见 [`gui_demo/学习文档.md`](gui_demo/学习文档.md)。接口说明见 `../接口使用说明.md`。

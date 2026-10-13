@@ -17,26 +17,22 @@ set(RCS_PROC_SOURCES
   src/rcs/process_rcs.cpp
   src/cw_rcs/process_cw_rcs.cpp
   src/sigma0/process_sigma0.cpp
+  src/sigma0/process_rcs_cal_tif.cpp
   src/l0_preview/process_l0_preview.cpp
   src/sdk_util/process_sdk_util.cpp
-  # 拼接入口始终编译（禁用时仅为 stub）
+  # 大图拼接（完整库始终编入）
   src/mosaic/process_mosaic.cpp
+  src/mosaic/MosaicAlgorithm.cpp
 )
 
-# 真正的 TIFF 算法仅在开启拼接时编进库
-if(RCS_ENABLE_MOSAIC)
-  list(APPEND RCS_PROC_SOURCES src/mosaic/MosaicAlgorithm.cpp)
+if(RCS_ENABLE_TOZERODATA)
+  list(APPEND RCS_PROC_SOURCES src/tozerodata/process_tozerodata.cpp)
 endif()
 
 add_library(rcs_proc SHARED ${RCS_PROC_SOURCES})
 add_library(rcs::proc ALIAS rcs_proc)
 
 target_compile_definitions(rcs_proc PRIVATE RCS_PROC_BUILD)
-if(RCS_ENABLE_MOSAIC)
-  target_compile_definitions(rcs_proc PRIVATE RCS_ENABLE_MOSAIC=1)
-else()
-  target_compile_definitions(rcs_proc PRIVATE RCS_ENABLE_MOSAIC=0)
-endif()
 
 target_include_directories(rcs_proc
   PUBLIC
@@ -57,8 +53,37 @@ target_include_directories(rcs_proc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mosaic
 )
 
-if(RCS_ENABLE_MOSAIC)
-  target_link_libraries(rcs_proc PRIVATE TIFF::TIFF)
+target_link_libraries(rcs_proc PRIVATE TIFF::TIFF)
+
+if(RCS_ENABLE_TOZERODATA)
+  set(TOZERODATA_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/tozerodata")
+  set(TOZERODATA_A "${TOZERODATA_ROOT}/lib/libToZeroDataCpp11.a")
+  if(NOT EXISTS "${TOZERODATA_A}")
+    message(FATAL_ERROR
+      "RCS_ENABLE_TOZERODATA=ON 但缺少静态库: ${TOZERODATA_A}\n"
+      "请放入 libToZeroDataCpp11.a / tozerodata.h，或关掉: -DRCS_ENABLE_TOZERODATA=OFF")
+  endif()
+  if(NOT EXISTS "${TOZERODATA_ROOT}/include/tozerodata.h")
+    message(FATAL_ERROR "缺少 ${TOZERODATA_ROOT}/include/tozerodata.h")
+  endif()
+
+  add_library(ToZeroDataCpp11 STATIC IMPORTED GLOBAL)
+  set_target_properties(ToZeroDataCpp11 PROPERTIES
+    IMPORTED_LOCATION "${TOZERODATA_A}"
+    INTERFACE_INCLUDE_DIRECTORIES "${TOZERODATA_ROOT}/include"
+  )
+
+  target_include_directories(rcs_proc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tozerodata
+    ${TOZERODATA_ROOT}/include
+  )
+  # --whole-archive：把 .a 打进 librcs_proc.so
+  target_link_libraries(rcs_proc PRIVATE
+    -Wl,--whole-archive ToZeroDataCpp11 -Wl,--no-whole-archive)
+  target_compile_definitions(rcs_proc PUBLIC RCS_ENABLE_TOZERODATA=1)
+  message(STATUS "ToZeroData: ON (static link ${TOZERODATA_A})")
+else()
+  message(STATUS "ToZeroData: OFF")
 endif()
 
 if(UNIX AND NOT APPLE)

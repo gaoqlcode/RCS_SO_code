@@ -111,7 +111,6 @@ static bool testMosaic(const std::string &inDir)
     MosaicRequest req;
     req.inFolder = inDir;
     req.outFolder = pathJoin(repoRoot(), "testdata/lib_out/mosaic");
-    req.doFlatten = true;
     req.mode = 0;
 
     MosaicResponse resp;
@@ -119,15 +118,9 @@ static bool testMosaic(const std::string &inDir)
     std::string err;
     const bool ok = processMosaic(req, resp, cb, &err);
     std::printf("\n");
-#if !defined(RCS_ENABLE_MOSAIC) || !RCS_ENABLE_MOSAIC
-    // 默认禁用：确认接口拒绝调用
-    (void)inDir;
-    return check(!ok && err.find("禁用") != std::string::npos, "mosaic_disabled", err);
-#else
     if (!check(ok, "mosaic_process", err))
         return false;
     return check(pathExists(resp.mosaicTif), "mosaic_tif", resp.mosaicTif);
-#endif
 }
 
 int main()

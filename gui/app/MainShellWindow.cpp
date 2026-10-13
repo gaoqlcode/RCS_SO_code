@@ -4,9 +4,11 @@
 #include "modules/hrrp/HrrpPage.h"
 #include "modules/cw_rcs/CwRcsPage.h"
 #include "modules/sigma0/Sigma0Page.h"
+#include "modules/sigma0/RcsCalTifPage.h"
 #include "modules/l0_preview/L0PreviewPage.h"
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
 #include "modules/mosaic/MosaicPage.h"
+#if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
+#include "modules/tozero/ToZeroPage.h"
 #endif
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -27,14 +29,16 @@ MainShellWindow::MainShellWindow(QWidget *parent) : QMainWindow(parent)
     root->setSpacing(6);
 
     auto *tabs = new QTabWidget(central);
+#if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
+    tabs->addTab(new ToZeroPage(tabs), QStringLiteral("ToZeroData"));
+#endif
     tabs->addTab(new L0PreviewPage(session_, tabs), QStringLiteral("原始数据预览"));
     tabs->addTab(new RcsPage(session_, tabs), QStringLiteral("RCS测量"));
     tabs->addTab(new HrrpPage(session_, tabs), QStringLiteral("HRRP一维距离像"));
     tabs->addTab(new CwRcsPage(session_, tabs), QStringLiteral("点频RCS"));
     tabs->addTab(new Sigma0Page(tabs), QStringLiteral("后向散射系数"));
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
+    tabs->addTab(new RcsCalTifPage(tabs), QStringLiteral("RCS像辐射定标"));
     tabs->addTab(new MosaicPage(tabs), QStringLiteral("大场景拼接"));
-#endif
     root->addWidget(tabs, 1);
 
     setCentralWidget(central);

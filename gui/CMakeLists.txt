@@ -23,18 +23,22 @@ set(RCS_APP_SOURCES
   ${RCS_GUI_DIR}/modules/cw_rcs/CwRcsWorker.cpp
   ${RCS_GUI_DIR}/modules/sigma0/Sigma0Page.cpp
   ${RCS_GUI_DIR}/modules/sigma0/Sigma0Worker.cpp
+  ${RCS_GUI_DIR}/modules/sigma0/RcsCalTifPage.cpp
+  ${RCS_GUI_DIR}/modules/sigma0/RcsCalTifWorker.cpp
   ${RCS_GUI_DIR}/modules/l0_preview/L0PreviewPage.cpp
   ${RCS_GUI_DIR}/modules/l0_preview/L0PreviewWorker.cpp
   ${RCS_GUI_DIR}/modules/l0_preview/L0PreviewDialog.cpp
+  ${RCS_GUI_DIR}/modules/mosaic/MosaicPage.cpp
+  ${RCS_GUI_DIR}/modules/mosaic/MosaicWorker.cpp
+  ${RCS_GUI_DIR}/modules/mosaic/FlattenPanel.cpp
+  ${RCS_GUI_DIR}/modules/mosaic/ManualAlignDialog.cpp
   ${RCS_GUI_DIR}/resources/rcs207.qrc
 )
 
-if(RCS_ENABLE_MOSAIC)
+if(RCS_ENABLE_TOZERODATA)
   list(APPEND RCS_APP_SOURCES
-    ${RCS_GUI_DIR}/modules/mosaic/MosaicPage.cpp
-    ${RCS_GUI_DIR}/modules/mosaic/MosaicWorker.cpp
-    ${RCS_GUI_DIR}/modules/mosaic/FlattenPanel.cpp
-    ${RCS_GUI_DIR}/modules/mosaic/ManualAlignDialog.cpp
+    ${RCS_GUI_DIR}/modules/tozero/ToZeroPage.cpp
+    ${RCS_GUI_DIR}/modules/tozero/ToZeroWorker.cpp
   )
 endif()
 
@@ -60,18 +64,18 @@ target_include_directories(RCS PRIVATE
   ${RCS_PUBLIC_INCLUDE_DIR}
 )
 
+if(RCS_ENABLE_TOZERODATA)
+  target_include_directories(RCS PRIVATE ${RCS_GUI_DIR}/modules/tozero)
+  # 源码编库时由 rcs_proc PUBLIC 带上；USE_SDK 时需自行声明
+  target_compile_definitions(RCS PRIVATE RCS_ENABLE_TOZERODATA=1)
+endif()
+
 target_link_libraries(RCS PRIVATE rcs_proc Qt5::Core Qt5::Gui Qt5::Widgets)
 if(WIN32)
   target_link_libraries(RCS PRIVATE Qt5::WinMain)
 endif()
 if(UNIX AND NOT APPLE)
   target_link_libraries(RCS PRIVATE pthread dl)
-endif()
-
-if(RCS_ENABLE_MOSAIC)
-  target_compile_definitions(RCS PRIVATE RCS_ENABLE_MOSAIC=1)
-else()
-  target_compile_definitions(RCS PRIVATE RCS_ENABLE_MOSAIC=0)
 endif()
 
 if(RCS_USE_SDK)

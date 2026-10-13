@@ -4,6 +4,9 @@
 
 大致就是：Worker 线程调库、进度/日志 signal 回主线程、选点用 `BlockingQueuedConnection` 弹窗、曲线自己画。
 
+**从零写起的详细讲解**见 [`学习文档.md`](学习文档.md)（架构 → CMake → 控件 → Bridge → Worker → MainWindow → 时序 → 扩展）。  
+源码内已加**逐句中文注释**，可直接对着 `.h` / `.cpp` 读。
+
 ## 编译
 
 ```bash

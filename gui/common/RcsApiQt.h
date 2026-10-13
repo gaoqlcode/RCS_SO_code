@@ -56,12 +56,12 @@ inline InteractSelection toLibSel(const UserSelection &q)
     return a;
 }
 
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
 struct MosaicResultQt {
     QString mosaicTif;
-    QString offsetsCsv;
     QString flattenTif;
     QString displayTif;
+    QString rcsTif;
+    QString l3Path;
     QVector<int> seamCols;
 };
 
@@ -71,13 +71,13 @@ inline MosaicResultQt toQtMosaic(const MosaicResponse &r)
 {
     MosaicResultQt o;
     o.mosaicTif = qs(r.mosaicTif);
-    o.offsetsCsv = qs(r.offsetsCsv);
     o.flattenTif = qs(r.flattenTif);
     o.displayTif = qs(r.displayTif);
+    o.rcsTif = qs(r.rcsTif);
+    o.l3Path = qs(r.l3Path);
     for (size_t i = 0; i < r.seamCols.size(); ++i)
         o.seamCols.push_back(r.seamCols[i]);
     return o;
 }
-#endif
 
 #endif

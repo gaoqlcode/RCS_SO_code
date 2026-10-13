@@ -1,5 +1,5 @@
 @echo off
-REM Copy Windows rcs_proc DLL into sdk\lib. Headers stay in sdk\include (no mosaic).
+REM Copy Windows rcs_proc DLL into sdk\lib. Headers stay in sdk\include (full API incl. mosaic).
 REM MinGW usually names it librcs_proc.dll (lib prefix).
 setlocal
 cd /d %~dp0\..

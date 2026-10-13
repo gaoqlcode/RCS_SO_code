@@ -52,9 +52,19 @@ inline QString sigma0ResultTag()
     return QStringLiteral("后向散射");
 }
 
+inline QString rcsCalTifResultTag()
+{
+    return QStringLiteral("RCS像定标");
+}
+
 inline QString mosaicResultTag()
 {
     return QStringLiteral("拼接");
+}
+
+inline QString toZeroResultTag()
+{
+    return QStringLiteral("ToZero");
 }
 
 inline QString resolveOutDir(const QString &userOut, const QString &baseFolder, const QString &tag)

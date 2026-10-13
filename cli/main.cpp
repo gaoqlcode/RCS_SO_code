@@ -16,10 +16,8 @@ static void usage()
         << "  rcs_cli cw-rcs --in <dat_dir> --pol HH --out <dir> [--sigma 18.25]\n"
         << "  rcs_cli sigma0 --raw <file.raw> --nr N --na N --cal x,y,w,h --tgt x,y,w,h [--out dir]\n"
         << "  rcs_cli l0-preview --in <dat_dir> --pol HH [--pulse 1] [--max 5]\n"
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
         << "  rcs_cli mosaic --in <img_dir> --out <dir>\n"
         << "  rcs_cli flatten --in <tif> --out <tif>\n"
-#endif
         ;
 }
 
@@ -159,21 +157,15 @@ static int cmdCwRcs(int argc, char **argv)
     return 0;
 }
 
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
 static int cmdMosaic(int argc, char **argv)
 {
     MosaicRequest req;
-    req.doFlatten = true;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--in")
             req.inFolder = argVal(argc, argv, i);
         else if (a == "--out")
             req.outFolder = argVal(argc, argv, i);
-        else if (a == "--flatten")
-            req.doFlatten = true;
-        else if (a == "--no-flatten")
-            req.doFlatten = false;
         else if (a == "--med")
             req.medOut = std::atof(argVal(argc, argv, i).c_str());
         else {
@@ -195,7 +187,6 @@ static int cmdMosaic(int argc, char **argv)
     std::cerr << "\nOK mosaic=" << resp.mosaicTif << "\n";
     return 0;
 }
-#endif
 
 static bool parseRoiCsv(const std::string &s, RectRoi &out)
 {
@@ -313,7 +304,6 @@ static int cmdSigma0(int argc, char **argv)
     return 0;
 }
 
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
 static int cmdFlatten(int argc, char **argv)
 {
     std::string in, out;
@@ -348,7 +338,6 @@ static int cmdFlatten(int argc, char **argv)
     std::cerr << "\nOK flatten=" << out << "\n";
     return 0;
 }
-#endif
 
 int main(int argc, char **argv)
 {
@@ -367,12 +356,10 @@ int main(int argc, char **argv)
         return cmdSigma0(argc, argv);
     if (cmd == "l0-preview" || cmd == "yssj" || cmd == "preview")
         return cmdL0Preview(argc, argv);
-#if defined(RCS_ENABLE_MOSAIC) && RCS_ENABLE_MOSAIC
     if (cmd == "mosaic")
         return cmdMosaic(argc, argv);
     if (cmd == "flatten")
         return cmdFlatten(argc, argv);
-#endif
     if (cmd == "-h" || cmd == "--help" || cmd == "help") {
         usage();
         return 0;

@@ -310,6 +310,78 @@ struct Sigma0Response {
     Sigma0Response() : K(0), pNoise(0) {}
 };
 
+// ===== [9] RCS 像辐射定标（角反 K → 整景 dBsm TIFF + 三级 txt）=====
+// 对应 MATLAB HXSSXS_207_cal_tif.m
+
+namespace rcs {
+enum RcsCalAnchor { RcsCalLastRow = 0, RcsCalCenter = 1, RcsCalCrKnown = 2 };
+enum RcsCalL3Layout { RcsCalL3Point = 0, RcsCalL3Row = 1 };
+} // namespace rcs
+
+struct RcsCalTifRequest {
+    std::string calibRawPath; ///< 含角反的定标 RAW
+    std::string rawFolder;    ///< 待批量定标的 RAW 目录
+    std::string outDir;       ///< 空则用 rawFolder
+    std::string tgtName;      ///< 三级文件名前缀，如「林地」
+    std::string band;         ///< 波段筛文件 + 波束宽：X/Ku/Ka/W
+    std::string pol;          ///< 极化筛文件，空=不按极化筛
+    double sigmaTheoryDb;     ///< 角反理论 RCS dBsm
+    double fsHz;
+    double incAngleDeg;
+    double hFlight;
+    int anchorMode; ///< rcs::RcsCal*
+    double rCalKnown;
+    int rowCrHint;
+    bool doCalib;   ///< true=框选角反求 K；false=用下面预填的 K/R_near/Rbin
+    int l3Layout;   ///< rcs::RcsCalL3Point / Row
+    int maxFiles;   ///< <=0 全部
+    bool autoPick;  ///< false=onRectRoi 框角反缓冲；true=用 calBufRoi
+    RectRoi calBufRoi;
+    // doCalib=false 时复用
+    double K;
+    double R_near;
+    double Rbin;
+    Level3Info header; ///< 可选覆盖三级头字段（空则用默认）
+    // 库内固定（不暴露）：始终写 *_RCS_dBsm.tif + 三级 txt；DN=dBsm×100
+
+    RcsCalTifRequest()
+        : band("X"), pol("HH"), sigmaTheoryDb(18.25), fsHz(1.25e9), incAngleDeg(70.0),
+          hFlight(500.0), anchorMode(0), rCalKnown(0), rowCrHint(0), doCalib(true), l3Layout(0),
+          maxFiles(0), autoPick(false), K(0), R_near(0), Rbin(0)
+    {
+        tgtName = "目标";
+    }
+};
+
+struct RcsCalTifFileResult {
+    std::string rawName;
+    std::string tifPath;
+    std::string txtPath;
+    int nr;
+    int na;
+    double dbsmMin;
+    double dbsmMax;
+    std::string note; ///< 跳过原因等
+    RcsCalTifFileResult() : nr(0), na(0), dbsmMin(0), dbsmMax(0) {}
+};
+
+struct RcsCalTifResponse {
+    double K;
+    double R_near;
+    double Rbin;
+    double R_cal;
+    double epsilon_cal;
+    double sigma_cal;
+    int peakRow;
+    int peakCol;
+    GrayImage preview;
+    std::vector<RcsCalTifFileResult> files;
+    RcsCalTifResponse()
+        : K(0), R_near(0), Rbin(0), R_cal(0), epsilon_cal(0), sigma_cal(0), peakRow(0), peakCol(0)
+    {
+    }
+};
+
 // ===== 0 级时域/频域预览 =====
 
 /** 单个文件的预览曲线与统计 */
@@ -365,5 +437,71 @@ struct L0FolderProbe {
 
     L0FolderProbe() : fileCount(0), hasHeader(false) {}
 };
+
+// ===== [8] 大图拼接 =====
+
+struct MosaicRequest {
+    std::string inFolder;  ///< 输入 TIFF/RAW 目录（支持 uint16 或 int16 RCS_dBsm）
+    std::string outFolder; ///< 输出目录
+    double medOut;         ///< 匀光目标中值（归一化约 0~1）
+    int mode;              ///< 0 自动配准  1 使用 offR/offC
+    std::vector<int> offR; ///< mode=1：各图方位向绝对偏移（全分辨率像素）
+    std::vector<int> offC; ///< mode=1：各图距离向绝对偏移
+    int rawNrHint;         ///< 仅 RAW 时可选尺寸提示；0=自动
+    int rawNaHint;
+    int l3Layout;          ///< 0=逐点  1=逐行
+    std::string band;      ///< 三级头：波段
+    std::string pol;       ///< 三级头：极化
+    Level3Info header;     ///< 可选覆盖三级头字段
+    // 库内固定（不暴露）：始终匀光 + MOSAIC_L3.txt（dBsm=DN/100）；不写 MOSAIC_RCS.tif
+
+    MosaicRequest()
+        : medOut(0.35), mode(0), rawNrHint(0), rawNaHint(0), l3Layout(0), band("X"), pol("HH")
+    {
+    }
+};
+
+struct MosaicResponse {
+    std::string mosaicTif;  ///< MOSAIC.tif（显示链融合，uint16）
+    std::string flattenTif; ///< MOSAIC_匀光.tif（必出）
+    std::string displayTif; ///< MOSAIC_显示.tif
+    std::string rcsTif;     ///< 本交付不写，恒为空
+    std::string l3Path;     ///< MOSAIC_L3.txt（必出）
+    std::vector<int> seamCols;
+};
+
+#if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
+// ===== [10] ToZeroData：源 DAT → 四极化 L0 DAT（+可选 .sarrec）；仅 Linux 可选编译 =====
+
+struct ToZeroDataRequest {
+    std::string sourcePath;     ///< 源 DAT（UTF-8）
+    std::string outputBasePath; ///< 输出基路径，如 .../source_L0.dat（派生 HH/VV/HV/VH）
+    bool saveRecovery;          ///< true=额外写 .sarrec 还原信息；默认 false
+
+    ToZeroDataRequest() : saveRecovery(false) {}
+};
+
+struct ToZeroDataPolarizationOut {
+    std::string polarization; ///< HH / VV / HV / VH
+    std::string path;
+    std::uint64_t frames;
+    std::uint64_t bytes;
+    ToZeroDataPolarizationOut() : frames(0), bytes(0) {}
+};
+
+struct ToZeroDataResponse {
+    std::uint64_t validRecords;
+    std::uint64_t skippedRecords;
+    std::uint64_t outputBytes; ///< 仅四个 DAT 合计
+    std::vector<ToZeroDataPolarizationOut> outputs;
+    std::string recoveryPath; ///< saveRecovery 且成功时非空
+    std::uint64_t recoveryBytes;
+    std::string sourceSha256;
+    ToZeroDataResponse()
+        : validRecords(0), skippedRecords(0), outputBytes(0), recoveryBytes(0)
+    {
+    }
+};
+#endif // RCS_ENABLE_TOZERODATA
 
 #endif

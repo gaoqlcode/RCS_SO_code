@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include "Util.hpp"
 #include "OutPath.h"
@@ -72,7 +73,9 @@ static inline uint16_t readBe16(const uint8_t *p)
     return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
 }
 
-bool readTiffU16(const std::string &path, std::vector<uint16_t> &pix, uint32_t &w, uint32_t &h, std::string *err)
+/** 读 16bit 单波段 TIFF → int32（兼容 uint16 振幅图 / int16 RCS_dBsm×100） */
+bool readTiff16AsI32(const std::string &path, std::vector<int32_t> &pix, uint32_t &w, uint32_t &h,
+                     bool &isSigned, std::string *err)
 {
     TIFF *tif = TIFFOpen(path.c_str(), "r");
     if (!tif) {
@@ -81,23 +84,125 @@ bool readTiffU16(const std::string &path, std::vector<uint16_t> &pix, uint32_t &
     }
     TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
     TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
-    uint16_t bps = 0, spp = 0;
+    uint16_t bps = 0, spp = 0, sf = SAMPLEFORMAT_UINT;
     TIFFGetFieldDefaulted(tif, TIFFTAG_BITSPERSAMPLE, &bps);
     TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
+    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sf);
     if (bps != 16 || spp != 1) {
         TIFFClose(tif);
-        if (err) *err = "仅支持 16bit 单波段灰度 TIFF";
+        if (err) *err = "仅支持 16bit 单波段灰度 TIFF（uint16 或 int16）";
         return false;
     }
+    isSigned = (sf == SAMPLEFORMAT_INT);
     pix.resize(static_cast<size_t>(w) * h);
-    for (uint32_t row = 0; row < h; ++row) {
-        if (TIFFReadScanline(tif, pix.data() + row * w, row) < 0) {
+    std::vector<uint16_t> row(w);
+    for (uint32_t r = 0; r < h; ++r) {
+        if (TIFFReadScanline(tif, row.data(), r) < 0) {
             TIFFClose(tif);
             if (err) *err = "读扫描行失败";
             return false;
         }
+        const size_t base = static_cast<size_t>(r) * w;
+        if (isSigned) {
+            for (uint32_t c = 0; c < w; ++c)
+                pix[base + c] = static_cast<int32_t>(static_cast<int16_t>(row[c]));
+        } else {
+            for (uint32_t c = 0; c < w; ++c)
+                pix[base + c] = static_cast<int32_t>(row[c]);
+        }
     }
     TIFFClose(tif);
+    return true;
+}
+
+bool readTiffU16(const std::string &path, std::vector<uint16_t> &pix, uint32_t &w, uint32_t &h, std::string *err)
+{
+    bool isSigned = false;
+    std::vector<int32_t> tmp;
+    if (!readTiff16AsI32(path, tmp, w, h, isSigned, err))
+        return false;
+    pix.resize(tmp.size());
+    for (size_t i = 0; i < tmp.size(); ++i) {
+        int32_t v = tmp[i];
+        if (v < 0)
+            v = 0;
+        if (v > 65535)
+            v = 65535;
+        pix[i] = static_cast<uint16_t>(v);
+    }
+    return true;
+}
+
+/**
+ * 加载拼接用显示链图像：定标 int16 先整体平移到非负再送配准/融合
+ * （与 MATLAB db2disp 一致；纯值导出另读原图）
+ */
+bool loadDisplayImgs(const std::vector<std::string> &paths, std::vector<std::vector<uint16_t>> &imgs,
+                     std::vector<uint32_t> &widths, std::vector<uint32_t> &heights, double &dbLoOut,
+                     std::function<void(int, const std::string &)> progress,
+                     std::function<bool()> cancelled, std::string *err)
+{
+    const int n = static_cast<int>(paths.size());
+    imgs.assign(static_cast<size_t>(n), {});
+    widths.assign(static_cast<size_t>(n), 0);
+    heights.assign(static_cast<size_t>(n), 0);
+    std::vector<std::vector<int32_t>> raw(static_cast<size_t>(n));
+    bool anySigned = false;
+    int32_t mn = 0;
+    bool haveMn = false;
+    for (int i = 0; i < n; ++i) {
+        if (cancelled && cancelled())
+            return false;
+        if (progress)
+            progress(5 + i * 12 / std::max(n, 1),
+                     std::string("读取 ") + fileNameOnly(paths[static_cast<size_t>(i)]));
+        bool isSigned = false;
+        if (!readTiff16AsI32(paths[static_cast<size_t>(i)], raw[static_cast<size_t>(i)],
+                             widths[static_cast<size_t>(i)], heights[static_cast<size_t>(i)], isSigned,
+                             err))
+            return false;
+        anySigned = anySigned || isSigned;
+        const auto &p = raw[static_cast<size_t>(i)];
+        for (size_t k = 0; k < p.size(); k += 64) { // 抽样找黑场，避免扫整幅两次
+            const int32_t v = p[k];
+            if (!haveMn || v < mn) {
+                mn = v;
+                haveMn = true;
+            }
+        }
+        for (size_t k = 0; k < p.size(); ++k) {
+            if (p[k] < 0) {
+                anySigned = true;
+                if (p[k] < mn)
+                    mn = p[k];
+            }
+        }
+    }
+    double dbLo = 0;
+    if (anySigned && haveMn) {
+        dbLo = static_cast<double>(mn) - 1.0; // MATLAB: 最小值 → 1
+        if (progress) {
+            std::ostringstream os;
+            os << "显示映射: 定标最小值 " << mn << " → 整体 +" << (-dbLo) << "（只影响看图链）";
+            progress(18, os.str());
+        }
+    }
+    dbLoOut = dbLo;
+    for (int i = 0; i < n; ++i) {
+        auto &dst = imgs[static_cast<size_t>(i)];
+        const auto &src = raw[static_cast<size_t>(i)];
+        dst.resize(src.size());
+        for (size_t k = 0; k < src.size(); ++k) {
+            double v = static_cast<double>(src[k]) - dbLo;
+            if (v < 0)
+                v = 0;
+            if (v > 65535)
+                v = 65535;
+            dst[k] = static_cast<uint16_t>(std::llround(v));
+        }
+        raw[static_cast<size_t>(i)].clear();
+        raw[static_cast<size_t>(i)].shrink_to_fit();
+    }
     return true;
 }
 
@@ -1073,10 +1178,247 @@ bool findBestSeam(const std::vector<float> &A, const std::vector<float> &B, int 
     return true;
 }
 
+static float seamRamp(double v, float s1, float s2)
+{
+    if (!(s2 > s1) || !(s1 > 0))
+        return 1.f;
+    const float t = static_cast<float>((s2 - v) / (s2 - s1));
+    return std::min(1.f, std::max(0.f, t));
+}
+
+/** 纯几何+羽化导出 MOSAIC_RCS.tif / MOSAIC_L3.txt（不经 preNorm/匀光） */
+bool exportPureValue(const std::vector<std::string> &paths, const std::vector<uint32_t> &widths,
+                     const std::vector<uint32_t> &heights, const std::vector<int> &rOff,
+                     const std::vector<int> &cOff, const std::vector<int> &vR1,
+                     const std::vector<int> &vC1, const std::vector<int> &Nr,
+                     const std::vector<int> &Na, const std::vector<float> &seamC_L,
+                     const std::vector<float> &seamC_R, int canvasH, int canvasW,
+                     const std::string &outDir, MosaicResult &result,
+                     std::function<void(int, const std::string &)> progress,
+                     std::function<bool()> cancelled, std::string *err)
+{
+    if (!result.writeRcsTif && !result.writeL3)
+        return true;
+    const int n = static_cast<int>(paths.size());
+    if (progress)
+        progress(84, "导出 RCS 原值 / 三级数据…");
+
+    // 预读原值图（int32）
+    std::vector<std::vector<int32_t>> raw(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        if (cancelled && cancelled())
+            return false;
+        bool isSigned = false;
+        uint32_t w = 0, h = 0;
+        if (!readTiff16AsI32(paths[static_cast<size_t>(i)], raw[static_cast<size_t>(i)], w, h, isSigned,
+                             err))
+            return false;
+        if (w != widths[static_cast<size_t>(i)] || h != heights[static_cast<size_t>(i)]) {
+            if (err)
+                *err = "导出时尺寸与配准不一致: " + paths[static_cast<size_t>(i)];
+            return false;
+        }
+        (void)isSigned;
+    }
+
+    std::vector<float> acc(static_cast<size_t>(canvasH) * canvasW, 0.f);
+    std::vector<float> wsum(static_cast<size_t>(canvasH) * canvasW, 0.f);
+    for (int i = 0; i < n; ++i) {
+        if (cancelled && cancelled())
+            return false;
+        const int c0 = std::max(0, cOff[static_cast<size_t>(i)]);
+        const int c1 = std::min(canvasW, cOff[static_cast<size_t>(i)] + Na[static_cast<size_t>(i)]);
+        const int r0 = std::max(0, rOff[static_cast<size_t>(i)]);
+        const int r1 = std::min(canvasH, rOff[static_cast<size_t>(i)] + Nr[static_cast<size_t>(i)]);
+        if (c0 >= c1 || r0 >= r1)
+            continue;
+        // MATLAB: w = localRamp(col, seamC(i,左), seamC(i,右)) → 左缝=1、右缝=0
+        const float sL = seamC_L[static_cast<size_t>(i)];
+        const float sR = seamC_R[static_cast<size_t>(i)];
+        const uint32_t wi = widths[static_cast<size_t>(i)];
+        for (int y = r0; y < r1; ++y) {
+            const int srcY = y - rOff[static_cast<size_t>(i)] + vR1[static_cast<size_t>(i)];
+            for (int x = c0; x < c1; ++x) {
+                const int srcX = x - cOff[static_cast<size_t>(i)] + vC1[static_cast<size_t>(i)];
+                const float w = std::max(1e-4f, seamRamp(static_cast<double>(x) + 1.0, sL, sR));
+                const int32_t dn =
+                    raw[static_cast<size_t>(i)][static_cast<size_t>(srcY) * wi + static_cast<size_t>(srcX)];
+                const size_t idx = static_cast<size_t>(y) * canvasW + static_cast<size_t>(x);
+                acc[idx] += static_cast<float>(dn) * w;
+                wsum[idx] += w;
+            }
+        }
+    }
+    raw.clear();
+
+    std::vector<int16_t> outR(static_cast<size_t>(canvasH) * canvasW, static_cast<int16_t>(-32768));
+    std::vector<float> dbsm;
+    if (result.writeL3)
+        dbsm.assign(outR.size(), std::numeric_limits<float>::quiet_NaN());
+    const double scale = (result.l3Scale > 0) ? result.l3Scale : 100.0;
+    for (size_t i = 0; i < outR.size(); ++i) {
+        if (wsum[i] <= 0)
+            continue;
+        const float v = acc[i] / wsum[i];
+        int iv = static_cast<int>(std::llround(v));
+        if (iv < -32767)
+            iv = -32767;
+        if (iv > 32767)
+            iv = 32767;
+        outR[i] = static_cast<int16_t>(iv);
+        if (result.writeL3)
+            dbsm[i] = static_cast<float>(v / scale);
+    }
+    acc.clear();
+    wsum.clear();
+
+    if (result.writeRcsTif) {
+        result.rcsTif = pathJoin(outDir, "MOSAIC_RCS.tif");
+        // 用 libtiff 写 int16
+        TIFF *tif = TIFFOpen(result.rcsTif.c_str(), "w");
+        if (!tif) {
+            if (err)
+                *err = "无法创建 " + result.rcsTif;
+            return false;
+        }
+        TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, static_cast<uint32_t>(canvasW));
+        TIFFSetField(tif, TIFFTAG_IMAGELENGTH, static_cast<uint32_t>(canvasH));
+        TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 16);
+        TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 1);
+        TIFFSetField(tif, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_INT);
+        TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+        TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+        TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
+        TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, static_cast<uint32_t>(canvasH));
+        for (int y = 0; y < canvasH; ++y) {
+            if (TIFFWriteScanline(tif, outR.data() + static_cast<size_t>(y) * canvasW, y) < 0) {
+                TIFFClose(tif);
+                if (err)
+                    *err = "写 MOSAIC_RCS.tif 失败";
+                return false;
+            }
+        }
+        TIFFClose(tif);
+        if (progress)
+            progress(90, "已写 " + result.rcsTif);
+    }
+
+    if (result.writeL3) {
+        result.l3Path = pathJoin(outDir, "MOSAIC_L3.txt");
+        Level3Info info = result.l3Header;
+        if (info.taskName.empty())
+            info.taskName = "SAR二维像RCS拼接";
+        if (info.dataSource.empty())
+            info.dataSource = "多张定标TIFF拼接";
+        if (info.dataType.empty())
+            info.dataType = "3级 RCS 二维像(dBsm)";
+        if (info.calMode.empty())
+            info.calMode = "角反射器能量(积分)法";
+        if (info.calName.empty())
+            info.calName = "角反射器";
+        if (info.tgtName.empty())
+            info.tgtName = "MOSAIC";
+        if (info.pol.empty())
+            info.pol = result.pol;
+        {
+            std::ostringstream note;
+            note << "波段=" << result.band << "; 极化=" << result.pol
+                 << "; 单位=dBsm(真值=拼接DN/" << scale
+                 << "); 仅几何摆位+羽化加权; 未做匀色/明暗调整";
+            if (info.note.empty())
+                info.note = note.str();
+        }
+        // 流式写 5252 头 + DATA
+        auto field = [](const std::string &k, const std::string &v) { return k + " = " + v + "\r\n"; };
+        std::ostringstream hdr;
+        hdr << "[TASK]\r\n" << field("任务名称", info.taskName) << field("任务负责人", info.operatorName)
+            << field("任务单位", info.unit) << field("任务代号", info.code) << field("任务来源", info.source)
+            << field("数据来源", info.dataSource) << field("数据类型", info.dataType)
+            << field("任务执行地点", info.place) << field("任务执行时间", info.time)
+            << field("定标形式", info.calMode) << field("定标体名称", info.calName)
+            << field("定标体尺寸", info.calSize) << field("不确定度", info.uncertainty) << "[/TASK]\r\n"
+            << "[TARGET]\r\n" << field("目标名称", info.tgtName) << field("目标说明", info.tgtDesc)
+            << field("目标分类", info.tgtClass) << field("目标长(m)", info.tgtL)
+            << field("目标宽(m)", info.tgtW) << field("目标高(m)", info.tgtH) << "[/TARGET]\r\n"
+            << "[SYSTEM]\r\n" << field("设备名称", info.devName) << field("设备分类", info.devClass)
+            << field("工作体制", info.sysMode) << field("脉冲宽度(μs)", info.pulseWidth)
+            << field("脉冲重复频率", info.prf) << field("动态范围(dB)", info.dynRange) << "[/SYSTEM]\r\n"
+            << "[ENVIRONMENT]\r\n" << field("温度(℃)", info.temp) << field("湿度(%)", info.humidity)
+            << field("气压(hPa)", info.pressure) << field("能见度(km)", info.visibility)
+            << field("云况", info.cloud) << "[/ENVIRONMENT]\r\n"
+            << "[CONDITIONS]\r\n" << field("测量时刻", info.measureTime)
+            << field("频率步长(GHz)", info.fStep) << field("起始频率(GHz)", info.fStart)
+            << field("终止频率(GHz)", info.fStop) << field("极化组合", info.pol)
+            << field("目标高度(m)", info.tgtHeight) << field("起始入射方位视向角(°)", info.azStart)
+            << field("终止入射方位视向角(°)", info.azStop) << field("起始入射俯仰视向角(°)", info.elStart)
+            << field("终止入射俯仰视向角(°)", info.elStop) << field("回波采样率", info.fs)
+            << field("备注", info.note) << "[/CONDITIONS]\r\n";
+        std::string header = hdr.str();
+        const int kHdr = 5252;
+        if (static_cast<int>(header.size()) < kHdr)
+            header.append(static_cast<size_t>(kHdr - static_cast<int>(header.size())), ' ');
+        FILE *fp = std::fopen(result.l3Path.c_str(), "wb");
+        if (!fp) {
+            if (err)
+                *err = "无法写 " + result.l3Path;
+            return false;
+        }
+        std::fwrite(header.data(), 1, header.size(), fp);
+        char line[128];
+        int nw = std::snprintf(line, sizeof(line),
+                               "[DATA]\r\nRCS[径向点数（行数%d），横向点数（列数%d）]\r\n", canvasH,
+                               canvasW);
+        if (nw > 0)
+            std::fwrite(line, 1, static_cast<size_t>(nw), fp);
+        char num[64];
+        if (result.l3Layout == 1) {
+            for (int r = 0; r < canvasH; ++r) {
+                for (int c = 0; c < canvasW; ++c) {
+                    if (c)
+                        std::fputc(' ', fp);
+                    const float v = dbsm[static_cast<size_t>(r) * canvasW + c];
+                    if (v != v)
+                        std::fputs("NaN", fp);
+                    else {
+                        std::snprintf(num, sizeof(num), "%.3f", static_cast<double>(v));
+                        std::fputs(num, fp);
+                    }
+                }
+                std::fputs("\r\n", fp);
+            }
+        } else {
+            for (int r = 0; r < canvasH; ++r) {
+                for (int c = 0; c < canvasW; ++c) {
+                    const float v = dbsm[static_cast<size_t>(r) * canvasW + c];
+                    if (v != v)
+                        nw = std::snprintf(line, sizeof(line), "%d %d NaN\r\n", r + 1, c + 1);
+                    else
+                        nw = std::snprintf(line, sizeof(line), "%d %d %.3f\r\n", r + 1, c + 1,
+                                           static_cast<double>(v));
+                    if (nw > 0)
+                        std::fwrite(line, 1, static_cast<size_t>(nw), fp);
+                }
+            }
+        }
+        std::fputs("[/DATA]\r\n", fp);
+        const bool ok = std::ferror(fp) == 0;
+        std::fclose(fp);
+        if (!ok) {
+            if (err)
+                *err = "写三级数据失败";
+            return false;
+        }
+        if (progress)
+            progress(93, "已写 " + result.l3Path);
+    }
+    return true;
+}
+
 bool fuseAndWrite(std::vector<std::vector<uint16_t>> &imgs,
                   std::vector<uint32_t> &widths,
                   std::vector<uint32_t> &heights,
                   std::vector<int> offR, std::vector<int> offC,
+                  const std::vector<std::string> &paths,
                   const std::string &outDir, bool doFlatten, double medOut,
                   MosaicResult &result,
                   std::function<void(int, const std::string &)> progress,
@@ -1586,15 +1928,10 @@ bool fuseAndWrite(std::vector<std::vector<uint16_t>> &imgs,
                       outPix.data(), err))
         return false;
 
-    result.offsetsCsv = pathJoin(outDir, "MOSAIC_offsets.csv");
-    {
-        std::ofstream ofs(result.offsetsCsv);
-        if (ofs) {
-            ofs << "Index,OffsetRow,OffsetCol\n";
-            for (int i = 0; i < n; ++i)
-                ofs << (i + 1) << "," << rOff[static_cast<size_t>(i)] << "," << cOff[static_cast<size_t>(i)] << "\n";
-        }
-    }
+    // ★纯值支路：MOSAIC_RCS.tif + MOSAIC_L3.txt（不受显示链/匀色影响）
+    if (!exportPureValue(paths, widths, heights, rOff, cOff, vR1, vC1, Nr, Na, seamC_L, seamC_R,
+                         canvasH, canvasW, outDir, result, progress, cancelled, err))
+        return false;
 
     // 拼后显示版 MOSAIC_显示.tif（原值不动）
     if (progress) progress(88, "写出显示版…");
@@ -1734,9 +2071,10 @@ bool MosaicAlgorithm::prepareInputFiles(const std::string &inFolder, const std::
 bool MosaicAlgorithm::loadGrayPreview(const std::string &path, int step, GrayPreview &preview,
                                       std::string *err)
 {
-    std::vector<uint16_t> pix;
+    std::vector<int32_t> pix;
     uint32_t w = 0, h = 0;
-    if (!readTiffU16(path, pix, w, h, err))
+    bool isSigned = false;
+    if (!readTiff16AsI32(path, pix, w, h, isSigned, err))
         return false;
     preview.fullW = static_cast<int>(w);
     preview.fullH = static_cast<int>(h);
@@ -1746,18 +2084,32 @@ bool MosaicAlgorithm::loadGrayPreview(const std::string &path, int step, GrayPre
     preview.width = ow;
     preview.height = oh;
     preview.pixels.assign(static_cast<size_t>(ow * oh), 0);
-    std::vector<uint16_t> sample;
+
+    // 定标 int16：先按 2% 分位拉黑场（与 MATLAB readPreview）
+    std::vector<double> sample;
     sample.reserve(std::min(200000, static_cast<int>(pix.size())));
     const int stride = std::max(1, static_cast<int>(pix.size() / 100000));
     for (size_t i = 0; i < pix.size(); i += static_cast<size_t>(stride))
-        sample.push_back(pix[i]);
+        sample.push_back(static_cast<double>(pix[i]));
     std::sort(sample.begin(), sample.end());
-    const double lo = sample.empty() ? 0.0 : sample[static_cast<size_t>(static_cast<int>(0.005 * (sample.size() - 1)))];
-    const double hi = sample.empty() ? 65535.0 : sample[static_cast<size_t>(static_cast<int>(0.995 * (sample.size() - 1)))];
+    double ped = 0;
+    if (isSigned || (!sample.empty() && sample.front() < 0)) {
+        ped = sample[static_cast<size_t>(std::max(0, static_cast<int>(0.02 * (sample.size() - 1))))];
+        for (double &v : sample)
+            v = std::max(v - ped, 0.0);
+    }
+    const double lo =
+        sample.empty() ? 0.0
+                       : sample[static_cast<size_t>(static_cast<int>(0.005 * (sample.size() - 1)))];
+    const double hi =
+        sample.empty() ? 1.0
+                       : sample[static_cast<size_t>(static_cast<int>(0.995 * (sample.size() - 1)))];
     const double span = std::max(hi - lo, 1.0);
     for (int y = 0; y < oh; ++y) {
         for (int x = 0; x < ow; ++x) {
-            const uint16_t v = pix[static_cast<size_t>((y * step) * w + (x * step))];
+            double v = static_cast<double>(pix[static_cast<size_t>((y * step) * w + (x * step))]) - ped;
+            if (v < 0)
+                v = 0;
             preview.pixels[static_cast<size_t>(y * ow + x)] =
                 static_cast<uint8_t>(clampi(static_cast<int>((v - lo) / span * 255.0), 0, 255));
         }
@@ -1783,16 +2135,13 @@ bool MosaicAlgorithm::run(const std::string &inFolder, const std::string &outFol
     std::string outDir = resolveOutDir(outFolder, inFolder, mosaicResultTag());
     makeDirs(outDir);
 
-    const int n = paths.size();
-    std::vector<std::vector<uint16_t>> imgs(static_cast<size_t>(n));
-    std::vector<uint32_t> widths(static_cast<size_t>(n)), heights(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        if (cancelled && cancelled()) return false;
-        if (progress) progress(5 + i * 15 / n, std::string("读取 ") + fileNameOnly(paths[static_cast<size_t>(i)]));
-        if (!readTiffU16(paths[i], imgs[static_cast<size_t>(i)], widths[static_cast<size_t>(i)],
-                         heights[static_cast<size_t>(i)], err))
-            return false;
-    }
+    const int n = static_cast<int>(paths.size());
+    std::vector<std::vector<uint16_t>> imgs;
+    std::vector<uint32_t> widths, heights;
+    double dbLo = 0;
+    if (!loadDisplayImgs(paths, imgs, widths, heights, dbLo, progress, cancelled, err))
+        return false;
+    (void)dbLo;
 
     std::vector<int> offC(static_cast<size_t>(n), 0), offR(static_cast<size_t>(n), 0);
     for (int i = 1; i < n; ++i) {
@@ -1827,7 +2176,7 @@ bool MosaicAlgorithm::run(const std::string &inFolder, const std::string &outFol
         offC[i] = offC[i - 1] + dC;
     }
 
-    return fuseAndWrite(imgs, widths, heights, offR, offC, outDir, doFlatten, medOut,
+    return fuseAndWrite(imgs, widths, heights, offR, offC, paths, outDir, doFlatten, medOut,
                         result, progress, cancelled, err);
 }
 
@@ -1854,17 +2203,13 @@ bool MosaicAlgorithm::runWithOffsets(const std::string &inFolder, const std::str
     std::string outDir = resolveOutDir(outFolder, inFolder, mosaicResultTag());
     makeDirs(outDir);
 
-    const int n = paths.size();
-    std::vector<std::vector<uint16_t>> imgs(static_cast<size_t>(n));
-    std::vector<uint32_t> widths(static_cast<size_t>(n)), heights(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        if (cancelled && cancelled()) return false;
-        if (progress) progress(5 + i * 20 / n, std::string("读取 ") + fileNameOnly(paths[static_cast<size_t>(i)]));
-        if (!readTiffU16(paths[i], imgs[static_cast<size_t>(i)], widths[static_cast<size_t>(i)],
-                         heights[static_cast<size_t>(i)], err))
-            return false;
-    }
-    return fuseAndWrite(imgs, widths, heights, offR, offC, outDir, doFlatten, medOut,
+    std::vector<std::vector<uint16_t>> imgs;
+    std::vector<uint32_t> widths, heights;
+    double dbLo = 0;
+    if (!loadDisplayImgs(paths, imgs, widths, heights, dbLo, progress, cancelled, err))
+        return false;
+    (void)dbLo;
+    return fuseAndWrite(imgs, widths, heights, offR, offC, paths, outDir, doFlatten, medOut,
                         result, progress, cancelled, err);
 }
 

@@ -1,6 +1,7 @@
 #ifndef MOSAICALGORITHM_H
 #define MOSAICALGORITHM_H
 
+#include "rcs/types.hpp"
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -16,10 +17,19 @@ struct GrayPreview {
 
 struct MosaicResult {
     std::string mosaicTif;
-    std::string offsetsCsv;
     std::string flattenTif;
     std::string displayTif; // MOSAIC_显示.tif（拼后明暗调整，原值 MOSAIC.tif 不动）
+    std::string rcsTif;     // MOSAIC_RCS.tif（int16 纯值）
+    std::string l3Path;     // MOSAIC_L3.txt
     std::vector<int> seamCols;
+    // 导出开关（由 processMosaic 填入；产品默认：匀光+三级开，RCS.tif 关）
+    bool writeRcsTif = false;
+    bool writeL3 = true;
+    double l3Scale = 100.0;
+    int l3Layout = 0;
+    std::string band = "X";
+    std::string pol = "HH";
+    Level3Info l3Header;
 };
 
 class MosaicAlgorithm {

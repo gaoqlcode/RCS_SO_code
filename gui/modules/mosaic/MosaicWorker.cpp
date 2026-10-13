@@ -11,7 +11,6 @@ void MosaicWorker::startProcess()
     MosaicRequest req;
     req.inFolder = ss(params_.inFolder);
     req.outFolder = ss(params_.outFolder);
-    req.doFlatten = params_.doFlatten;
     req.medOut = params_.medOut;
     req.mode = params_.mode;
     req.rawNrHint = params_.rawNrHint;

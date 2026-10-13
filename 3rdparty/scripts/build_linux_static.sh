@@ -147,5 +147,5 @@ file "$INST/lib/libtiff.a"
 echo
 echo "下一步:"
 echo "  rm -rf ../../build   # 或工程根目录的 build"
-echo "  cd ../.. && cmake -S . -B build -DRCS_ENABLE_MOSAIC=ON -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF"
+echo "  cd ../.. && cmake -S . -B build -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF"
 echo "  cmake --build build -j && ./sdk/pack_sdk.sh"

@@ -61,12 +61,23 @@ bool processRcs(const RcsRequest &req, RcsResponse &resp, Callbacks &cb, std::st
 
     MergeSidecar side;
     std::string merged, localErr;
+    // 中间文件 _merged_CR.dat 只供本次读取和拷成正式 1 级 dat，结束时删除
+    struct MergedCleanup {
+        std::string path;
+        ~MergedCleanup()
+        {
+            if (!path.empty())
+                removeFile(path);
+        }
+    } mergedCleanup;
     if (!MergeDat::mergeFolder(req.dataFolder, req.pol, merged, &side, &localErr, outDir,
                                [&]() { return cancelled(cb); })) {
+        mergedCleanup.path = merged;
         if (err)
             *err = localErr;
         return false;
     }
+    mergedCleanup.path = merged;
     if (cancelled(cb)) {
         if (err)
             *err = "已取消";

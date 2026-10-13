@@ -40,7 +40,7 @@ chmod +x 3rdparty/scripts/*.sh
 ls 3rdparty/install/linux_aarch64/lib/libtiff.a
 
 rm -rf build
-cmake -S . -B build -DRCS_ENABLE_MOSAIC=ON -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF
+cmake -S . -B build -DRCS_TIFF_PREFER_STATIC=ON -DRCS_BUILD_GUI=OFF
 cmake --build build -j
 ./sdk/pack_sdk.sh
 ```

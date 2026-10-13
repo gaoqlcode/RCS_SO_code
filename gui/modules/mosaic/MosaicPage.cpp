@@ -12,7 +12,6 @@
 #include <QSizePolicy>
 #include <QTimer>
 #include <QLineEdit>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
@@ -38,7 +37,7 @@ MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
     pathLay->setSpacing(6);
     inEdit_ = new QLineEdit(pathBox);
     inEdit_->setMinimumHeight(28);
-    inEdit_->setPlaceholderText(QStringLiteral("含 TIFF 或 RAW 的目录"));
+    inEdit_->setPlaceholderText(QStringLiteral("含 *_RCS_dBsm.tif / TIFF / RAW 的目录"));
     auto *browse = new QPushButton(QStringLiteral("浏览…"), pathBox);
     browse->setFixedWidth(72);
     auto *inRow = new QHBoxLayout;
@@ -77,9 +76,6 @@ MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
     modeCombo_->addItem(QStringLiteral("自动拼接"), 0);
     modeCombo_->addItem(QStringLiteral("手动拼接"), 1);
     form->addRow(QStringLiteral("拼接方式"), modeCombo_);
-    flattenCheck_ = new QCheckBox(QStringLiteral("拼完后自动匀光"), paramBox);
-    flattenCheck_->setChecked(true);
-    form->addRow(QString(), flattenCheck_);
     medSpin_ = new QDoubleSpinBox(paramBox);
     medSpin_->setRange(0.05, 0.9);
     medSpin_->setSingleStep(0.01);
@@ -113,7 +109,7 @@ MosaicPage::MosaicPage(QWidget *parent) : QWidget(parent)
     auto *rightLay = new QVBoxLayout(right);
     rightLay->setContentsMargins(6, 0, 0, 0);
     resultLabel_ = new QLabel(
-        QStringLiteral("拼接完成后，右侧显示结果路径；可在下方对已有 MOSAIC.tif 单独匀光。"),
+        QStringLiteral("拼接完成后自动匀光并写出三级数据；右侧显示结果路径。"),
         right);
     resultLabel_->setWordWrap(true);
     resultLabel_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -278,7 +274,6 @@ void MosaicPage::onStart()
     MosaicParams p;
     p.inFolder = inEdit_->text().trimmed();
     p.outFolder = outDir_->text();
-    p.doFlatten = flattenCheck_->isChecked();
     p.medOut = medSpin_->value();
     p.mode = modeCombo_->currentData().toInt();
     p.rawNrHint = rawNrSpin_->value();
@@ -330,8 +325,8 @@ void MosaicPage::onReady(const MosaicResult &result)
         log_->appendLog(QStringLiteral("匀光: %1").arg(result.flattenTif));
         flattenPanel_->setTifPath(result.mosaicTif);
     }
-    if (!result.offsetsCsv.isEmpty())
-        log_->appendLog(QStringLiteral("偏移表: %1").arg(result.offsetsCsv));
+    if (!result.l3Path.isEmpty())
+        log_->appendLog(QStringLiteral("三级: %1").arg(result.l3Path));
 
     QStringList lines;
     lines << QStringLiteral("拼接完成");
@@ -341,7 +336,7 @@ void MosaicPage::onReady(const MosaicResult &result)
         lines << QStringLiteral("显示版: %1").arg(QDir::toNativeSeparators(result.displayTif));
     if (!result.flattenTif.isEmpty())
         lines << QStringLiteral("匀光: %1").arg(QDir::toNativeSeparators(result.flattenTif));
-    if (!result.offsetsCsv.isEmpty())
-        lines << QStringLiteral("偏移表: %1").arg(QDir::toNativeSeparators(result.offsetsCsv));
+    if (!result.l3Path.isEmpty())
+        lines << QStringLiteral("三级: %1").arg(QDir::toNativeSeparators(result.l3Path));
     resultLabel_->setText(lines.join(QStringLiteral("\n")));
 }

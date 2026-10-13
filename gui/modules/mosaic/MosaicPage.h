@@ -6,7 +6,6 @@
 #include "MosaicWorker.h"
 
 class QLineEdit;
-class QCheckBox;
 class QDoubleSpinBox;
 class QSpinBox;
 class QPushButton;
@@ -39,7 +38,6 @@ private:
     QLineEdit *inEdit_ = nullptr;
     OutDirField *outDir_ = nullptr;
     QComboBox *modeCombo_ = nullptr;
-    QCheckBox *flattenCheck_ = nullptr;
     QDoubleSpinBox *medSpin_ = nullptr;
     QSpinBox *rawNrSpin_ = nullptr;
     QSpinBox *rawNaSpin_ = nullptr;
