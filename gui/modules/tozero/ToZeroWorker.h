@@ -15,16 +15,9 @@ struct ToZeroParams {
     int lastFileId;
     int rangeOffset;
     int fileNum;
-    int testMode;
-    int aperLen;
-    int tarPosY;
-    int iqOrderBand1;
-    int iqOrderBand2;
     int rangePoints;
-    int errEstStart;
-    int errEstLength;
+    int kind;
     QString engineDirectory;
-    QString mcrRoot;
     int timeoutSec;
     bool requireEngine;
 
@@ -34,14 +27,8 @@ struct ToZeroParams {
         , lastFileId(6000)
         , rangeOffset(100)
         , fileNum(16)
-        , testMode(0)
-        , aperLen(256)
-        , tarPosY(1711)
-        , iqOrderBand1(1)
-        , iqOrderBand2(1)
         , rangePoints(8192)
-        , errEstStart(500)
-        , errEstLength(500)
+        , kind(0)
         , timeoutSec(0)
         , requireEngine(true)
     {

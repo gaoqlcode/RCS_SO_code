@@ -13,6 +13,7 @@ Makefile
 Makefile.*
 object_script.*
 *:Zone.Identifier
+升级/
 
 # Generated outputs
 testdata/lib_out/

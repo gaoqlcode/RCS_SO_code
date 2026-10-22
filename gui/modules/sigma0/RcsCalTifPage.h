@@ -24,6 +24,8 @@ public:
 private slots:
     void onBrowseCalib();
     void onBrowseFolder();
+    void onBrowseL0();
+    void onBrowseMerge();
     void onStart();
     void onCancel();
     void onNeedRectRoi(const QImage &preview, int fullNr, int fullNa, const QString &stage);
@@ -34,6 +36,8 @@ private:
 
     QLineEdit *calibEdit_;
     QLineEdit *folderEdit_;
+    QLineEdit *l0Edit_;
+    QLineEdit *mergeEdit_;
     OutDirField *outDir_;
     QLineEdit *nameEdit_;
     QComboBox *bandCombo_;

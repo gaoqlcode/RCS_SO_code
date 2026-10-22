@@ -12,10 +12,12 @@ QMAKE_RPATHDIR += $$SDK_ROOT/lib
 HEADERS += \
     MainWindow.h \
     CalMosaicWorker.h \
-    RectPickDialog.h
+    RectPickDialog.h \
+    ManualAlignDialog.h
 
 SOURCES += \
     main.cpp \
     MainWindow.cpp \
     CalMosaicWorker.cpp \
-    RectPickDialog.cpp
+    RectPickDialog.cpp \
+    ManualAlignDialog.cpp

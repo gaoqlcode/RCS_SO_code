@@ -7,6 +7,7 @@
 #include <QFileInfo>
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -41,20 +42,13 @@ ToZeroPage::ToZeroPage(QWidget *parent)
     , outDir_(0)
     , baseNameEdit_(0)
     , engineEdit_(0)
-    , mcrEdit_(0)
+    , kindCombo_(0)
     , beginSpin_(0)
     , deltaSpin_(0)
     , lastSpin_(0)
     , numSpin_(0)
     , offsetSpin_(0)
-    , testSpin_(0)
-    , aperSpin_(0)
-    , tarYSpin_(0)
-    , iq1Spin_(0)
-    , iq2Spin_(0)
     , rangeSpin_(0)
-    , errStartSpin_(0)
-    , errLenSpin_(0)
     , timeoutSpin_(0)
     , engineCheck_(0)
     , startBtn_(0)
@@ -99,7 +93,7 @@ ToZeroPage::ToZeroPage(QWidget *parent)
 
     engineEdit_ = new QLineEdit(pathBox);
     engineEdit_->setMinimumHeight(28);
-    engineEdit_->setPlaceholderText(QStringLiteral("留空则使用随包 engine/for_testing"));
+    engineEdit_->setPlaceholderText(QStringLiteral("留空则使用库旁 engine（含 bin/sarIsarPostProcess）"));
     auto *engBrowse = new QPushButton(QStringLiteral("浏览…"), pathBox);
     engBrowse->setFixedWidth(72);
     auto *engRow = new QHBoxLayout;
@@ -107,14 +101,6 @@ ToZeroPage::ToZeroPage(QWidget *parent)
     engRow->addWidget(engineEdit_, 1);
     engRow->addWidget(engBrowse);
     pathLay->addLayout(engRow);
-
-    mcrEdit_ = new QLineEdit(pathBox);
-    mcrEdit_->setMinimumHeight(28);
-    mcrEdit_->setText(QStringLiteral("/usr/local/MATLAB/MATLAB_Runtime/v93"));
-    auto *mcrRow = new QHBoxLayout;
-    mcrRow->addWidget(new QLabel(QStringLiteral("MCR 目录"), pathBox));
-    mcrRow->addWidget(mcrEdit_, 1);
-    pathLay->addLayout(mcrRow);
     root->addWidget(pathBox);
 
     auto *split = new QSplitter(Qt::Horizontal, this);
@@ -130,7 +116,7 @@ ToZeroPage::ToZeroPage(QWidget *parent)
     leftLay->setContentsMargins(10, 4, 10, 4);
     leftLay->setSpacing(10);
 
-    auto *paramBox = new QGroupBox(QStringLiteral("成像参数（须与数据编号匹配，文件个数至少 2）"), left);
+    auto *paramBox = new QGroupBox(QStringLiteral("成像参数（须与数据编号匹配；SAR 文件个数至少 2）"), left);
     auto *form = new QFormLayout(paramBox);
     form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -139,35 +125,25 @@ ToZeroPage::ToZeroPage(QWidget *parent)
     form->setVerticalSpacing(8);
     form->setContentsMargins(8, 10, 8, 8);
 
-    beginSpin_ = makeSpin(paramBox, 30, 0, 1000000);
+    beginSpin_ = makeSpin(paramBox, 3, 0, 1000000);
     deltaSpin_ = makeSpin(paramBox, 120, 0, 1000000);
     lastSpin_ = makeSpin(paramBox, 6000, 0, 1000000);
-    numSpin_ = makeSpin(paramBox, 16, 2, 1000000);
+    numSpin_ = makeSpin(paramBox, 50, 2, 1000000);
     offsetSpin_ = makeSpin(paramBox, 100, -1000000, 1000000);
-    testSpin_ = makeSpin(paramBox, 0, 0, 100);
-    aperSpin_ = makeSpin(paramBox, 256, 1, 1000000);
-    tarYSpin_ = makeSpin(paramBox, 1711, 0, 10000000);
-    iq1Spin_ = makeSpin(paramBox, 1, 0, 10);
-    iq2Spin_ = makeSpin(paramBox, 1, 0, 10);
     rangeSpin_ = makeSpin(paramBox, 8192, 1, 10000000);
-    errStartSpin_ = makeSpin(paramBox, 500, 0, 10000000);
-    errLenSpin_ = makeSpin(paramBox, 500, 0, 10000000);
     timeoutSpin_ = makeSpin(paramBox, 0, 0, 86400);
     timeoutSpin_->setSpecialValueText(QStringLiteral("不限制"));
 
+    kindCombo_ = new QComboBox(paramBox);
+    kindCombo_->addItem(QStringLiteral("SAR 成像"), 0);
+    kindCombo_->addItem(QStringLiteral("ISAR 成像"), 1);
+    form->addRow(QStringLiteral("成像类型"), kindCombo_);
     form->addRow(QStringLiteral("起始文件编号"), beginSpin_);
     form->addRow(QStringLiteral("间隔文件数目"), deltaSpin_);
     form->addRow(QStringLiteral("最后文件编号"), lastSpin_);
     form->addRow(QStringLiteral("文件个数"), numSpin_);
     form->addRow(QStringLiteral("距离偏移"), offsetSpin_);
-    form->addRow(QStringLiteral("测试模式"), testSpin_);
-    form->addRow(QStringLiteral("误差估计点数"), aperSpin_);
-    form->addRow(QStringLiteral("目标位置 y"), tarYSpin_);
-    form->addRow(QStringLiteral("波段1 IQ 顺序"), iq1Spin_);
-    form->addRow(QStringLiteral("波段2 IQ 顺序"), iq2Spin_);
     form->addRow(QStringLiteral("距离向点数"), rangeSpin_);
-    form->addRow(QStringLiteral("误差估计开始点"), errStartSpin_);
-    form->addRow(QStringLiteral("误差估计长度"), errLenSpin_);
     form->addRow(QStringLiteral("超时（秒）"), timeoutSpin_);
     engineCheck_ = new QCheckBox(QStringLiteral("调用后处理引擎（取消则只还原）"), paramBox);
     engineCheck_->setChecked(true);
@@ -190,8 +166,9 @@ ToZeroPage::ToZeroPage(QWidget *parent)
     auto *rightLay = new QVBoxLayout(right);
     rightLay->setContentsMargins(6, 0, 0, 0);
     resultLabel_ = new QLabel(
-        QStringLiteral("一次完成两步：源 DAT → HH/VV/HV/VH 与 .sarrec，再对该目录成像。\n"
-                       "图像写回 L0 所在目录。目标机需安装 MATLAB Runtime v9.3。"),
+        QStringLiteral("一次完成两步：源 DAT → HH/VV/HV/VH 与 .sarrec，再调用 sarIsarPostProcess。\n"
+                       "不需要 MATLAB。图像默认写回 L0 目录，并多出 .cplx。\n"
+                       "定标时按目标框从同名 .cplx 生成距离文件，并写入三级的横向、径向距离。"),
         right);
     resultLabel_->setWordWrap(true);
     resultLabel_->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -227,6 +204,8 @@ ToZeroPage::ToZeroPage(QWidget *parent)
     });
     thread_->start();
 
+    connect(kindCombo_, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+            this, &ToZeroPage::onKindChanged);
     connect(srcBrowse, &QPushButton::clicked, this, &ToZeroPage::onBrowseSource);
     connect(srcEdit_, &QLineEdit::editingFinished, this, &ToZeroPage::refreshDefaultOut);
     connect(engBrowse, &QPushButton::clicked, this, &ToZeroPage::onBrowseEngine);
@@ -289,6 +268,17 @@ QString ToZeroPage::buildOutputBasePath() const
     return QDir(dir).filePath(name);
 }
 
+void ToZeroPage::onKindChanged(int index)
+{
+    const bool isar = index == 1;
+    beginSpin_->setValue(isar ? 12 : 3);
+    deltaSpin_->setValue(isar ? 100 : 120);
+    lastSpin_->setValue(6000);
+    numSpin_->setValue(isar ? 8 : 50);
+    offsetSpin_->setValue(isar ? 1140 : 100);
+    rangeSpin_->setValue(isar ? 512 : 8192);
+}
+
 void ToZeroPage::onBrowseEngine()
 {
     const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("选择引擎目录"),
@@ -318,16 +308,9 @@ void ToZeroPage::onStart()
     p.lastFileId = spinValue(lastSpin_);
     p.fileNum = spinValue(numSpin_);
     p.rangeOffset = spinValue(offsetSpin_);
-    p.testMode = spinValue(testSpin_);
-    p.aperLen = spinValue(aperSpin_);
-    p.tarPosY = spinValue(tarYSpin_);
-    p.iqOrderBand1 = spinValue(iq1Spin_);
-    p.iqOrderBand2 = spinValue(iq2Spin_);
     p.rangePoints = spinValue(rangeSpin_);
-    p.errEstStart = spinValue(errStartSpin_);
-    p.errEstLength = spinValue(errLenSpin_);
+    p.kind = kindCombo_->currentData().toInt() == 1 ? 1 : 0;
     p.engineDirectory = engineEdit_->text().trimmed();
-    p.mcrRoot = mcrEdit_->text().trimmed();
     p.timeoutSec = spinValue(timeoutSpin_);
     p.requireEngine = engineCheck_->isChecked();
 
@@ -335,6 +318,7 @@ void ToZeroPage::onStart()
     log_->reset();
     log_->appendLog(QStringLiteral("源 DAT: ") + p.sourcePath);
     log_->appendLog(QStringLiteral("L0 基路径: ") + p.outputBasePath);
+    log_->appendLog(p.kind == 1 ? QStringLiteral("成像类型: ISAR") : QStringLiteral("成像类型: SAR"));
     log_->appendLog(QStringLiteral("起始=%1 间隔=%2 最后=%3 个数=%4")
                         .arg(p.beginId)
                         .arg(p.deltaNum)

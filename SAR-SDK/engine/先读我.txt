@@ -1,0 +1,61 @@
+SAR / ISAR 图像后处理程序 v1.0 —— 先读我
+========================================================================
+
+【不需要编译，也不需要安装任何依赖】
+    本包是编译好的可执行程序，解压后直接运行。
+    不需要 g++ / cmake / Qt / MATLAB Runtime。
+    运行库（Qt5Core、ICU、FFTW）已放在 lib/ 下，程序自动加载。
+
+【本包不含源代码】
+    仅提供可执行程序与运行库。如需源码级支持，请与交付方联系。
+
+一、直接运行
+------------------------------------------------------------------------
+    cd SAR_ISAR_PostProcessing_Linux_v1.0
+
+    # 1) 先看数据目录里有哪些数据组（只读，不产生文件）
+    ./bin/sarIsarPostProcess --kind sar --input <数据目录> --list
+
+    # 2) SAR：20 个连续文件出一幅全极化图，产物写回数据目录
+    ./bin/sarIsarPostProcess --kind sar --input <数据目录> --begin 1 --num 20
+
+    # 3) ISAR：12 号起 8 个文件出一幅
+    ./bin/sarIsarPostProcess --kind isar --input <数据目录> --begin 12 --num 8
+
+    # 不想覆盖原目录就加 --output <输出目录>
+    # 更多例子见《调用示例.md》，全部参数执行 --help
+
+二、包内文件
+------------------------------------------------------------------------
+    bin/sarIsarPostProcess   统一入口（扫描→还原→成像→回写），日常用这个
+    bin/sarProcessor         SAR 成像（吃 Para.ini，兼容旧调用方式）
+    bin/IsarProcessorApp     ISAR 成像（吃 Para.ini，兼容旧调用方式）
+    bin/SarTxtExporter       从 .cplx 导出切片报表（秒级）
+    lib/                     随包运行库
+    run_sar.sh / run_isar.sh 简化的调用包装脚本
+    Para_SAR.ini / Para_ISAR.ini  示例配置（供单程序方式使用）
+    调用示例.md              各种场景的可复制命令
+    交付说明.md              程序清单、参数说明、常见问题
+    CHECKSUMS.sha256         文件校验值
+
+三、SarTxtExporter 单独导出切片报表（不需要重新成像）
+------------------------------------------------------------------------
+    ./bin/SarTxtExporter <图像文件或.cplx> --roi <X> <Y> <宽> [高] [-o 输出.txt]
+
+    # 例：在 3288 列 / 1711 行处框选 401x401
+    ./bin/SarTxtExporter Image_Nr8192Na2666File1_21Ku_HH.cplx --roi 3288 1711 401
+
+    # 不给 --roi 时自动在图像中心附近找最强点；耗时约 0.02 秒
+    # X=方位向列号，Y=距离向行号，原点在左上角
+    # 完整命令、输入解析规则、报表字段见《调用示例.md》附录 A
+
+四、常见疑问
+------------------------------------------------------------------------
+问：需要编译吗？
+答：不需要。bin/ 下就是可执行程序。
+
+问：需要装 Qt 或 MATLAB 吗？
+答：都不需要，运行库已随包。
+
+问：支持什么系统？
+答：x86_64 Linux（银河麒麟 V10、UOS、Ubuntu、CentOS 等均可）。

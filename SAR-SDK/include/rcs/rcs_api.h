@@ -45,7 +45,7 @@ RCS_API const char *rcsVersion();
  *   1) doCalib=true：读 calibRawPath →（autoPick=false 时 onRectRoi 框角反缓冲，
  *      或 autoPick=true 用 calBufRoi）→ 积分求 ε、K、R_near 等；
  *   2) 扫描 rawFolder 中带 Nr/Na、匹配 band/pol 的 .raw；
- *   3) 写出 int16 TIFF与三级 txt。
+ *   3) 写出 int16 TIFF、三级 txt，以及同名二级 .pdat。
  *
  * 输入约定：RAW 无头 uint16 LE；文件名含 Nr{行}Na{列}，如 Image_Nr2048Na4602_X_HH.raw。
  * 输出：{stem}_RCS_dBsm.tif 、{tgtName}{时间戳}.txt。
@@ -157,11 +157,11 @@ RCS_API std::string toZeroDataRecoveryPath(const std::string &outputBasePath);
  *
  * sourcePath 与 outputBasePath 同时给出时走完整流程。
  * 只填 inputDirectory、不填源 DAT 时，只对已有 L0 目录成像。
- * 两步实现都已静态合入 librcs_proc。客户只链 -lrcs_proc。
- * 运行前提：目标机已安装 MATLAB Runtime v9.3（安装器在 runtime/，执行 bash runtime/install_mcr.sh）；
- * 引擎在 engine/for_testing。
+ * 一次调用完成。客户只链 -lrcs_proc。
+ * 后处理程序是 engine/bin/sarIsarPostProcess，自带运行库，不需要安装 MATLAB。
+ * SAR 会先读 SAR_Raw_0001.dat，ISAR 会先探测 SAR_Raw_0011.dat，这两个编号必须存在。
  * 同步阻塞。建议实现 onProgress / onMessage / isCancelled。
- * 当前只完整支持 SAR（kind=0）。文件个数至少为 2，且须与数据编号匹配。
+ * kind=0 为 SAR，kind=1 为 ISAR。SAR 的文件个数至少为 2，且须与数据编号匹配。
  *
  * @param req   源 DAT、L0 基路径、成像参数
  * @param resp  L0 四极化路径，以及成像产物
@@ -197,5 +197,9 @@ RCS_API std::string zeroImageSidecarPath(const std::string &polarizedPath);
  */
 RCS_API bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderResponse &resp,
                                     Callbacks &cb, std::string *err = 0);
+
+/** 对已有图像的 .cplx 按框导出切片报表。imagePath 也可传同名 .tif/.raw。 */
+RCS_API bool exportSliceTxt(const SliceTxtRequest &req, SliceTxtResponse &resp, Callbacks &cb,
+                            std::string *err = 0);
 
 #endif

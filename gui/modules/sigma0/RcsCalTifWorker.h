@@ -11,6 +11,8 @@ struct RcsCalTifParams {
     QString calibRaw;
     QString rawFolder;
     QString outDir;
+    QString l0HeaderPath;
+    QString mergeTxtPath;
     QString tgtName;
     QString band;
     QString pol;
@@ -25,6 +27,8 @@ struct RcsCalTifResultQt {
     double K;
     QStringList tifPaths;
     QStringList txtPaths;
+    QStringList pdatPaths;
+    QStringList positionPaths;
     QString summary;
 };
 

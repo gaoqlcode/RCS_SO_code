@@ -40,6 +40,9 @@ fi
 
 rm -f "$SDK/lib"/librcs_proc.so*
 cp -a "$BUILD/lib"/librcs_proc.so* "$SDK/lib/"
+if [[ -f "$BUILD/lib/libToZeroDataCpp11.so" ]]; then
+  cp -a "$BUILD/lib/libToZeroDataCpp11.so" "$SDK/lib/"
+fi
 
 echo "已更新动态库: $SDK/lib"
 ls -la "$SDK/lib"

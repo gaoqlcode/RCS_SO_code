@@ -3,6 +3,7 @@
 #include "rcs/rcs.hpp"
 
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -28,10 +29,36 @@ std::string ss(const QString &s)
     return std::string(s.toUtf8().constData());
 }
 
+void fillImaging(ZeroImageParameters &p, int beginId, int deltaNum, int lastFileId, int fileNum,
+                 int rangeOffset, int rangePoints)
+{
+    p.beginId = beginId;
+    p.deltaNum = deltaNum;
+    p.lastFileId = lastFileId;
+    p.fileNum = fileNum;
+    p.rangeOffset = rangeOffset;
+    p.rangePoints = rangePoints;
+}
+
+QString sidecarLines(const std::vector<ToZeroDataPolarizationOut> &outs)
+{
+    QString msg;
+    for (size_t k = 0; k < outs.size(); ++k) {
+        const ToZeroDataPolarizationOut &o = outs[k];
+        msg += QStringLiteral("    L0 %1  %2  %3帧\n").arg(qs(o.polarization)).arg(qs(o.path)).arg(o.frames);
+        if (!o.path.empty())
+            msg += QStringLiteral("    zeroImageSidecarPath: %1\n").arg(qs(zeroImageSidecarPath(o.path)));
+    }
+    return msg;
+}
+
 } // namespace
 
 CalMosaicWorker::CalMosaicWorker(QObject *parent)
-    : QObject(parent), cancel_(false), haveRoi_(false), roiOk_(false)
+    : QObject(parent)
+    , cancel_(false)
+    , haveRoi_(false)
+    , roiOk_(false)
 {
 }
 
@@ -75,7 +102,7 @@ bool CalMosaicWorker::waitRectRoi(QRect &out)
 
 void CalMosaicWorker::startCal(const QString &calibRaw, const QString &rawFolder,
                                const QString &outDir, const QString &band, const QString &pol,
-                               double sigmaTheoryDb)
+                               double sigmaTheoryDb, const QString &l0Header, const QString &mergeTxt)
 {
     cancel_.store(false);
     clearWait();
@@ -85,22 +112,23 @@ void CalMosaicWorker::startCal(const QString &calibRaw, const QString &rawFolder
     req.calibRawPath = ss(calibRaw);
     req.rawFolder = ss(rawFolder);
     req.outDir = ss(outDir);
+    req.l0HeaderPath = ss(l0Header);
+    req.mergeTxtPath = ss(mergeTxt);
     req.band = ss(band);
     req.pol = ss(pol);
     req.sigmaTheoryDb = sigmaTheoryDb;
     req.doCalib = true;
     req.autoPick = false; // GUI：走 onRectRoi
-    req.l3Layout = rcs::RcsCalL3Point;
     req.tgtName = "目标";
 
     Callbacks cb;
     cb.onProgress = [this](int p, const std::string &m) { emit progress(p, qs(m)); };
     cb.onMessage = [this](const std::string &m) { emit message(qs(m)); };
     cb.isCancelled = [this]() { return cancel_.load(); };
-    cb.onRectRoi = [this](const GrayImage &g, int fullNr, int fullNa, const std::string & /*stage*/,
+    cb.onRectRoi = [this](const GrayImage &g, int fullNr, int fullNa, const std::string &stage,
                           RectRoi &out) -> bool {
         clearWait();
-        emit needRectRoi(grayToQImage(g), fullNr, fullNa);
+        emit needRectRoi(grayToQImage(g), fullNr, fullNa, qs(stage));
         QRect r;
         if (!waitRectRoi(r))
             return false;
@@ -128,21 +156,49 @@ void CalMosaicWorker::startCal(const QString &calibRaw, const QString &rawFolder
             msg += QStringLiteral("    TIFF: %1\n").arg(qs(f.tifPath));
         if (!f.txtPath.empty())
             msg += QStringLiteral("    L3:   %1\n").arg(qs(f.txtPath));
+        if (!f.pdatPath.empty())
+            msg += QStringLiteral("    L2:   %1\n").arg(qs(f.pdatPath));
+        if (!f.positionPath.empty())
+            msg += QStringLiteral("    位置: %1\n").arg(qs(f.positionPath));
+        if (!f.note.empty())
+            msg += QStringLiteral("    说明: %1\n").arg(qs(f.note));
     }
     emit finished(true, msg);
 }
 
-void CalMosaicWorker::startMosaic(const QString &inFolder, const QString &outFolder, double medOut)
+void CalMosaicWorker::setMosaicOffsets(const QVector<int> &offR, const QVector<int> &offC)
+{
+    offR_ = offR;
+    offC_ = offC;
+}
+
+void CalMosaicWorker::startMosaic(const QString &inFolder, const QString &outFolder, double medOut,
+                                  int mode, int rawNr, int rawNa)
 {
     cancel_.store(false);
     clearWait();
-    emit message(QStringLiteral("开始自动拼接…"));
+    emit message(mode == 1 ? QStringLiteral("调用 processMosaic（mode=1 手动偏移）…")
+                           : QStringLiteral("调用 processMosaic（mode=0 自动配准）…"));
 
     MosaicRequest req;
     req.inFolder = ss(inFolder);
     req.outFolder = ss(outFolder);
-    req.mode = 0;
+    req.mode = mode == 1 ? 1 : 0;
+    req.rawNrHint = rawNr;
+    req.rawNaHint = rawNa;
     req.medOut = medOut > 0 ? medOut : 0.35;
+    if (req.mode == 1) {
+        for (int i = 0; i < offR_.size(); ++i)
+            req.offR.push_back(offR_[i]);
+        for (int i = 0; i < offC_.size(); ++i)
+            req.offC.push_back(offC_[i]);
+        offR_.clear();
+        offC_.clear();
+        if (req.offR.size() < 2 || req.offR.size() != req.offC.size()) {
+            emit finished(false, QStringLiteral("手动偏移数量不足"));
+            return;
+        }
+    }
 
     Callbacks cb;
     cb.onProgress = [this](int p, const std::string &m) {
@@ -169,24 +225,50 @@ void CalMosaicWorker::startMosaic(const QString &inFolder, const QString &outFol
     emit finished(true, msg);
 }
 
-void CalMosaicWorker::startZeroImage(const QString &sourceDirectory, const QString &outputDirectory,
-                                     int beginId, int deltaNum, int lastFileId, int fileNum,
-                                     const QString &engineDir, const QString &mcrRoot, int timeoutSec)
+void CalMosaicWorker::startFlatten(const QString &inTif, const QString &outTif, double medOut)
 {
     cancel_.store(false);
     clearWait();
-    emit message(QStringLiteral("开始：目录内源 DAT 全部转为四极化 L0，然后成像…"));
+    emit message(QStringLiteral("调用 flattenMosaic…"));
+
+    QString out = outTif.trimmed();
+    if (out.isEmpty()) {
+        const int dot = inTif.lastIndexOf(QLatin1Char('.'));
+        out = (dot > 0 ? inTif.left(dot) : inTif) + QStringLiteral("_匀光.tif");
+    }
+
+    Callbacks cb;
+    cb.onProgress = [this](int p, const std::string &m) {
+        emit progress(p, qs(m));
+        emit message(qs(m));
+    };
+    cb.isCancelled = [this]() { return cancel_.load(); };
+
+    std::string err;
+    if (!flattenMosaic(ss(inTif), ss(out), medOut > 0 ? medOut : 0.35, std::vector<int>(), cb, &err)) {
+        if (cancel_.load())
+            emit finished(false, QStringLiteral("已取消"));
+        else
+            emit finished(false, qs(err));
+        return;
+    }
+    emit finished(true, QStringLiteral("匀光完成:\n  %1\n").arg(out));
+}
+
+void CalMosaicWorker::startZeroImage(const QString &sourceDirectory, const QString &outputDirectory,
+                                     int beginId, int deltaNum, int lastFileId, int fileNum,
+                                     int rangeOffset, int rangePoints, int kind)
+{
+    cancel_.store(false);
+    clearWait();
+    emit message(kind == 1 ? QStringLiteral("调用 processZeroImageFolder（目录转 L0 后 ISAR）…")
+                           : QStringLiteral("调用 processZeroImageFolder（目录转 L0 后 SAR）…"));
 
     ZeroImageFolderRequest req;
+    req.kind = kind == 1 ? 1 : 0;
     req.sourceDirectory = ss(sourceDirectory);
     req.outputDirectory = ss(outputDirectory);
-    req.parameters.beginId = beginId;
-    req.parameters.deltaNum = deltaNum;
-    req.parameters.lastFileId = lastFileId;
-    req.parameters.fileNum = fileNum;
-    req.engineDirectory = ss(engineDir);
-    req.mcrRoot = ss(mcrRoot);
-    req.timeoutMs = timeoutSec > 0 ? timeoutSec * 1000 : 0;
+    fillImaging(req.parameters, beginId, deltaNum, lastFileId, fileNum, rangeOffset, rangePoints);
 
     Callbacks cb;
     cb.onProgress = [this](int p, const std::string &m) {
@@ -213,10 +295,7 @@ void CalMosaicWorker::startZeroImage(const QString &sourceDirectory, const QStri
     for (size_t i = 0; i < resp.sources.size(); ++i) {
         const ZeroImageFolderSource &s = resp.sources[i];
         msg += QStringLiteral("  源 %1\n").arg(qs(s.sourcePath));
-        for (size_t k = 0; k < s.result.outputs.size(); ++k) {
-            const ToZeroDataPolarizationOut &o = s.result.outputs[k];
-            msg += QStringLiteral("    L0 %1  %2  %3帧\n").arg(qs(o.polarization)).arg(qs(o.path)).arg(o.frames);
-        }
+        msg += sidecarLines(s.result.outputs);
         if (!s.result.recoveryPath.empty())
             msg += QStringLiteral("    还原 %1\n").arg(qs(s.result.recoveryPath));
     }

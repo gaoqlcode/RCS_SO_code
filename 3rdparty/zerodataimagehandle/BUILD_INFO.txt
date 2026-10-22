@@ -1,7 +1,0 @@
-Linux 5.15.0-52-generic x86_64
-C++ standard: 11, Qt dependency: none
-Libraries: libZeroDataImageHandleCpp11.a (static, primary), libZeroDataImageHandleCpp11.so (shared)
-Bundled engine: engine/for_testing (MATLAB Compiler standalone)
-Runtime prerequisite: MATLAB Runtime v9.3 (R2017b)
-c++ (Kylin 9.3.0-10kylin5k0.5) 9.3.0
-glibc 2.31

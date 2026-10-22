@@ -5,6 +5,7 @@
 #include <QThread>
 #include "ToZeroWorker.h"
 
+class QComboBox;
 class QLineEdit;
 class QSpinBox;
 class QCheckBox;
@@ -22,6 +23,7 @@ public:
 private slots:
     void onBrowseSource();
     void onBrowseEngine();
+    void onKindChanged(int index);
     void refreshDefaultOut();
     QString buildOutputBasePath() const;
     void onStart();
@@ -36,20 +38,13 @@ private:
     OutDirField *outDir_;
     QLineEdit *baseNameEdit_;
     QLineEdit *engineEdit_;
-    QLineEdit *mcrEdit_;
+    QComboBox *kindCombo_;
     QSpinBox *beginSpin_;
     QSpinBox *deltaSpin_;
     QSpinBox *lastSpin_;
     QSpinBox *numSpin_;
     QSpinBox *offsetSpin_;
-    QSpinBox *testSpin_;
-    QSpinBox *aperSpin_;
-    QSpinBox *tarYSpin_;
-    QSpinBox *iq1Spin_;
-    QSpinBox *iq2Spin_;
     QSpinBox *rangeSpin_;
-    QSpinBox *errStartSpin_;
-    QSpinBox *errLenSpin_;
     QSpinBox *timeoutSpin_;
     QCheckBox *engineCheck_;
     QPushButton *startBtn_;

@@ -6,7 +6,8 @@ ToZeroWorker::ToZeroWorker(QObject *parent) : ProcessWorker(parent) {}
 void ToZeroWorker::startProcess()
 {
     clearSelectionWait();
-    emit message(QStringLiteral("开始：源 DAT 转四极化 L0，然后成像…"));
+    emit message(params_.kind == 1 ? QStringLiteral("开始：源 DAT 转四极化 L0，然后 ISAR 成像…")
+                                  : QStringLiteral("开始：源 DAT 转四极化 L0，然后 SAR 成像…"));
 
     ZeroImageRequest req;
     req.sourcePath = ss(params_.sourcePath);
@@ -17,16 +18,9 @@ void ToZeroWorker::startProcess()
     req.parameters.lastFileId = params_.lastFileId;
     req.parameters.rangeOffset = params_.rangeOffset;
     req.parameters.fileNum = params_.fileNum;
-    req.parameters.testMode = params_.testMode;
-    req.parameters.aperLen = params_.aperLen;
-    req.parameters.tarPosY = params_.tarPosY;
-    req.parameters.iqOrderBand1 = params_.iqOrderBand1;
-    req.parameters.iqOrderBand2 = params_.iqOrderBand2;
     req.parameters.rangePoints = params_.rangePoints;
-    req.parameters.errEstStart = params_.errEstStart;
-    req.parameters.errEstLength = params_.errEstLength;
+    req.kind = params_.kind;
     req.engineDirectory = ss(params_.engineDirectory);
-    req.mcrRoot = ss(params_.mcrRoot);
     req.timeoutMs = params_.timeoutSec > 0 ? params_.timeoutSec * 1000 : 0;
     req.requireEngine = params_.requireEngine;
 

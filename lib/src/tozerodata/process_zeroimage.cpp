@@ -1,16 +1,25 @@
 #include "rcs/rcs_api.h"
 
-#include "zerodataimagehandle.h"
-
 #include <dirent.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <map>
 #include <set>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -18,6 +27,12 @@ bool isDir(const std::string &path)
 {
     struct stat st;
     return !path.empty() && ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+bool isFile(const std::string &path)
+{
+    struct stat st;
+    return !path.empty() && ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
 std::string soDirectory()
@@ -35,41 +50,16 @@ std::string soDirectory()
     return path.substr(0, slash);
 }
 
-std::string defaultEngineDirectory()
+std::string resolveDir(const std::string &path)
 {
-    if (const char *env = std::getenv("RCS_ZDI_ENGINE_DIR")) {
-        if (isDir(env))
-            return env;
-    }
-    const std::string libDir = soDirectory();
-    if (!libDir.empty()) {
-        const std::string beside = libDir + "/../engine/for_testing";
-        char resolved[4096];
-        if (::realpath(beside.c_str(), resolved) && isDir(resolved))
-            return resolved;
-    }
-#ifdef RCS_ZDI_ENGINE_DIR
-    if (isDir(RCS_ZDI_ENGINE_DIR))
-        return RCS_ZDI_ENGINE_DIR;
-#endif
+    if (path.empty())
+        return std::string();
+    char resolved[4096];
+    if (::realpath(path.c_str(), resolved) && isDir(resolved))
+        return resolved;
+    if (isDir(path))
+        return path;
     return std::string();
-}
-
-std::string stageName(ZeroDataImageHandle::ProcessStage stage)
-{
-    switch (stage) {
-    case ZeroDataImageHandle::ProcessStage::Preparing:
-        return "准备数据";
-    case ZeroDataImageHandle::ProcessStage::Restoring:
-        return "还原原始数据";
-    case ZeroDataImageHandle::ProcessStage::Processing:
-        return "调用后处理程序";
-    case ZeroDataImageHandle::ProcessStage::Publishing:
-        return "保存结果";
-    case ZeroDataImageHandle::ProcessStage::Cleaning:
-        return "清理任务";
-    }
-    return "处理中";
 }
 
 std::string parentDirectory(const std::string &path)
@@ -87,6 +77,11 @@ std::string joinPath(const std::string &dir, const std::string &name)
     if (dir.empty() || dir[dir.size() - 1] == '/')
         return dir + name;
     return dir + "/" + name;
+}
+
+bool hasSpace(const std::string &path)
+{
+    return path.find(' ') != std::string::npos;
 }
 
 bool hasSuffixI(const std::string &s, const std::string &suffix)
@@ -153,6 +148,297 @@ bool listSourceDats(const std::string &dir, std::vector<std::string> &names, std
     return true;
 }
 
+std::string postExecutableIn(const std::string &dir)
+{
+    if (dir.empty())
+        return std::string();
+    const std::string nested = joinPath(joinPath(dir, "bin"), "sarIsarPostProcess");
+    if (isFile(nested))
+        return nested;
+    const std::string direct = joinPath(dir, "sarIsarPostProcess");
+    if (isFile(direct))
+        return direct;
+    return std::string();
+}
+
+std::string exporterIn(const std::string &dir)
+{
+    if (dir.empty())
+        return std::string();
+    const std::string nested = joinPath(joinPath(dir, "bin"), "SarTxtExporter");
+    if (isFile(nested))
+        return nested;
+    const std::string direct = joinPath(dir, "SarTxtExporter");
+    if (isFile(direct))
+        return direct;
+    return std::string();
+}
+
+std::string defaultPostRoot()
+{
+    if (const char *env = std::getenv("RCS_POST_ROOT")) {
+        const std::string dir = resolveDir(env);
+        if (!postExecutableIn(dir).empty())
+            return dir;
+    }
+    if (const char *env = std::getenv("RCS_ZDI_ENGINE_DIR")) {
+        const std::string dir = resolveDir(env);
+        if (!postExecutableIn(dir).empty())
+            return dir;
+        const std::string parent = resolveDir(parentDirectory(dir));
+        if (!postExecutableIn(parent).empty())
+            return parent;
+    }
+    const std::string libDir = soDirectory();
+    if (!libDir.empty()) {
+        const std::string beside = resolveDir(libDir + "/../engine");
+        if (!postExecutableIn(beside).empty())
+            return beside;
+    }
+#ifdef RCS_POST_ROOT
+    {
+        const std::string compiled = resolveDir(RCS_POST_ROOT);
+        if (!postExecutableIn(compiled).empty())
+            return compiled;
+    }
+#endif
+    return std::string();
+}
+
+const char *exitText(int code)
+{
+    switch (code) {
+    case 1:
+        return "命令行参数错误";
+    case 2:
+        return "扫描或批次错误";
+    case 3:
+        return "还原失败";
+    case 4:
+        return "成像失败";
+    case 5:
+        return "磁盘或内存不足";
+    case 6:
+        return "产物回写失败";
+    default:
+        return "后处理程序失败";
+    }
+}
+
+struct RunResult {
+    int exitCode;
+    std::string output;
+    RunResult() : exitCode(-1) {}
+};
+
+RunResult runCommand(const std::vector<std::string> &args, int timeoutMs,
+                     const std::function<bool()> &cancelled,
+                     const std::function<void(const std::string &)> &onLine)
+{
+    RunResult result;
+    if (args.empty()) {
+        result.output = "没有可执行文件";
+        return result;
+    }
+    int pipefd[2];
+    if (::pipe(pipefd) != 0) {
+        result.output = "无法创建管道";
+        return result;
+    }
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+        result.output = "无法启动后处理程序";
+        return result;
+    }
+    if (pid == 0) {
+        ::setpgid(0, 0);
+        ::close(pipefd[0]);
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::dup2(pipefd[1], STDERR_FILENO);
+        if (pipefd[1] != STDOUT_FILENO && pipefd[1] != STDERR_FILENO)
+            ::close(pipefd[1]);
+        std::vector<char *> argv;
+        argv.reserve(args.size() + 1);
+        for (std::size_t i = 0; i < args.size(); ++i)
+            argv.push_back(const_cast<char *>(args[i].c_str()));
+        argv.push_back(0);
+        // 后处理程序按其自身 RUNPATH 使用 engine/lib。
+        ::unsetenv("LD_LIBRARY_PATH");
+        ::unsetenv("QT_PLUGIN_PATH");
+        ::unsetenv("QT_QPA_PLATFORM_PLUGIN_PATH");
+        ::execv(argv[0], argv.data());
+        const char *msg = "无法执行后处理程序\n";
+        if (::write(STDOUT_FILENO, msg, std::strlen(msg)) < 0)
+            _exit(127);
+        _exit(127);
+    }
+    ::setpgid(pid, pid);
+    ::close(pipefd[1]);
+    const int flags = ::fcntl(pipefd[0], F_GETFL, 0);
+    if (flags >= 0)
+        ::fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+
+    std::string pending;
+    const time_t start = ::time(0);
+    bool killed = false;
+    for (;;) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(pipefd[0], &rfds);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 200000;
+        const int sel = ::select(pipefd[0] + 1, &rfds, 0, 0, &tv);
+        if (sel > 0 && FD_ISSET(pipefd[0], &rfds)) {
+            char buf[4096];
+            const ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+            if (n > 0) {
+                pending.append(buf, buf + n);
+                result.output.append(buf, buf + n);
+                std::size_t pos = 0;
+                for (;;) {
+                    const std::size_t nl = pending.find('\n', pos);
+                    if (nl == std::string::npos)
+                        break;
+                    std::string line = pending.substr(pos, nl - pos);
+                    if (!line.empty() && line[line.size() - 1] == '\r')
+                        line.erase(line.size() - 1);
+                    if (onLine && !line.empty())
+                        onLine(line);
+                    pos = nl + 1;
+                }
+                if (pos > 0)
+                    pending.erase(0, pos);
+            } else if (n == 0) {
+                break;
+            }
+        }
+        int status = 0;
+        const pid_t w = ::waitpid(pid, &status, WNOHANG);
+        if (w == pid) {
+            if (WIFEXITED(status))
+                result.exitCode = WEXITSTATUS(status);
+            else if (WIFSIGNALED(status))
+                result.exitCode = 128 + WTERMSIG(status);
+            else
+                result.exitCode = -1;
+            break;
+        }
+        if (!killed && cancelled && cancelled()) {
+            ::kill(-pid, SIGTERM);
+            killed = true;
+            result.exitCode = -2;
+        }
+        if (!killed && timeoutMs > 0) {
+            const time_t elapsed = ::time(0) - start;
+            if (elapsed * 1000 >= timeoutMs) {
+                ::kill(-pid, SIGTERM);
+                killed = true;
+                result.exitCode = -3;
+            }
+        }
+    }
+    char drain[4096];
+    for (;;) {
+        const ssize_t n = ::read(pipefd[0], drain, sizeof(drain));
+        if (n > 0) {
+            pending.append(drain, drain + n);
+            result.output.append(drain, drain + n);
+        } else {
+            break;
+        }
+    }
+    ::close(pipefd[0]);
+    if (onLine) {
+        std::size_t pos = 0;
+        while (pos < pending.size()) {
+            const std::size_t nl = pending.find('\n', pos);
+            const std::size_t end = nl == std::string::npos ? pending.size() : nl;
+            std::string line = pending.substr(pos, end - pos);
+            if (!line.empty() && line[line.size() - 1] == '\r')
+                line.erase(line.size() - 1);
+            if (!line.empty())
+                onLine(line);
+            if (nl == std::string::npos)
+                break;
+            pos = nl + 1;
+        }
+    }
+    int status = 0;
+    if (::waitpid(pid, &status, 0) == pid && result.exitCode == -1) {
+        if (WIFEXITED(status))
+            result.exitCode = WEXITSTATUS(status);
+    }
+    if (killed && result.exitCode > 0)
+        result.exitCode = cancelled && cancelled() ? -2 : result.exitCode;
+    return result;
+}
+
+std::string suffixOf(const std::string &path)
+{
+    const std::size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos)
+        return std::string();
+    return path.substr(dot);
+}
+
+void collectPublished(const std::string &dir, const std::map<std::string, std::uint64_t> &before,
+                      std::vector<ZeroImagePublishedFile> &out)
+{
+    if (!isDir(dir))
+        return;
+    DIR *dp = ::opendir(dir.c_str());
+    if (!dp)
+        return;
+    while (dirent *ent = ::readdir(dp)) {
+        const std::string name = ent->d_name;
+        if (name == "." || name == "..")
+            continue;
+        const bool image = (name.find("Image_") == 0 || name.find("IsarImage_") == 0);
+        if (!image)
+            continue;
+        if (!(hasSuffixI(name, ".raw") || hasSuffixI(name, ".tif") || hasSuffixI(name, ".tiff")
+              || hasSuffixI(name, ".cplx") || hasSuffixI(name, ".txt")))
+            continue;
+        const std::string full = joinPath(dir, name);
+        struct stat st;
+        if (::stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+            continue;
+        const std::map<std::string, std::uint64_t>::const_iterator it = before.find(full);
+        if (it != before.end() && it->second == static_cast<std::uint64_t>(st.st_mtime))
+            continue;
+        ZeroImagePublishedFile f;
+        f.path = full;
+        f.suffix = suffixOf(name);
+        f.bytes = static_cast<std::uint64_t>(st.st_size);
+        out.push_back(f);
+    }
+    ::closedir(dp);
+}
+
+std::map<std::string, std::uint64_t> snapshotImages(const std::string &dir)
+{
+    std::map<std::string, std::uint64_t> before;
+    if (!isDir(dir))
+        return before;
+    DIR *dp = ::opendir(dir.c_str());
+    if (!dp)
+        return before;
+    while (dirent *ent = ::readdir(dp)) {
+        const std::string name = ent->d_name;
+        if (name.find("Image_") != 0 && name.find("IsarImage_") != 0)
+            continue;
+        const std::string full = joinPath(dir, name);
+        struct stat st;
+        if (::stat(full.c_str(), &st) == 0 && S_ISREG(st.st_mode))
+            before[full] = static_cast<std::uint64_t>(st.st_mtime);
+    }
+    ::closedir(dp);
+    return before;
+}
+
 void copyImageResult(const ZeroImageResponse &image, ZeroImageFolderResponse &resp)
 {
     resp.exitCode = image.exitCode;
@@ -164,6 +450,34 @@ void copyImageResult(const ZeroImageResponse &image, ZeroImageFolderResponse &re
     resp.recordPath = image.recordPath;
     resp.configPath = image.configPath;
     resp.logPath = image.logPath;
+}
+
+std::string resolvePostExe(const ZeroImageRequest &req, std::string *err)
+{
+    if (!req.engineExecutable.empty()) {
+        if (!isFile(req.engineExecutable)) {
+            if (err)
+                *err = "引擎程序不存在: " + req.engineExecutable;
+            return std::string();
+        }
+        return req.engineExecutable;
+    }
+    std::string root = req.engineDirectory;
+    if (!root.empty() && !isDir(root)) {
+        if (err)
+            *err = "引擎目录不存在: " + root;
+        return std::string();
+    }
+    if (root.empty())
+        root = defaultPostRoot();
+    const std::string exe = postExecutableIn(root);
+    if (exe.empty()) {
+        if (err)
+            *err = "未找到 sarIsarPostProcess。请设置 engineDirectory 为后处理包根目录，"
+                   "或把含 bin/sarIsarPostProcess 的 engine 放在库旁";
+        return std::string();
+    }
+    return exe;
 }
 
 } // namespace
@@ -218,111 +532,127 @@ bool processZeroImage(const ZeroImageRequest &req, ZeroImageResponse &resp, Call
             *err = "请提供源 DAT 与输出基路径";
         return false;
     }
-
-    ZeroDataImageHandle::ProcessingOptions opt;
-    opt.kind = (req.kind == 1) ? ZeroDataImageHandle::ProcessKind::Isar
-                               : ZeroDataImageHandle::ProcessKind::Sar;
-    opt.inputDirectory = imageDir;
-    opt.parameters.fileDir = imageDir;
-    opt.parameters.beginId = req.parameters.beginId;
-    opt.parameters.deltaNum = req.parameters.deltaNum;
-    opt.parameters.lastFileId = req.parameters.lastFileId;
-    opt.parameters.rangeOffset = req.parameters.rangeOffset;
-    opt.parameters.fileNum = req.parameters.fileNum;
-    opt.parameters.testMode = req.parameters.testMode;
-    opt.parameters.aperLen = req.parameters.aperLen;
-    opt.parameters.tarPosY = req.parameters.tarPosY;
-    opt.parameters.iqOrderBand1 = req.parameters.iqOrderBand1;
-    opt.parameters.iqOrderBand2 = req.parameters.iqOrderBand2;
-    opt.parameters.rangePoints = req.parameters.rangePoints;
-    opt.parameters.errEstStart = req.parameters.errEstStart;
-    opt.parameters.errEstLength = req.parameters.errEstLength;
-    opt.requireEngine = req.requireEngine;
-    opt.keepWorkspace = req.keepWorkspace;
-
-    if (!req.engineDirectory.empty()) {
-        if (!isDir(req.engineDirectory)) {
-            if (err)
-                *err = "引擎目录不存在: " + req.engineDirectory;
-            return false;
-        }
-        opt.engine.engineDirectory = req.engineDirectory;
-    } else if (req.requireEngine) {
-        opt.engine.engineDirectory = defaultEngineDirectory();
-        if (opt.engine.engineDirectory.empty()) {
-            if (err)
-                *err = "未找到 SAR 后处理引擎。请设置 engineDirectory，或把 engine/for_testing 放在库旁，"
-                       "或设置环境变量 RCS_ZDI_ENGINE_DIR";
-            return false;
-        }
-    }
-    if (!req.engineExecutable.empty())
-        opt.engine.executable = req.engineExecutable;
-    if (!req.mcrRoot.empty())
-        opt.engine.mcrRoot = req.mcrRoot;
-    if (!req.mcrCacheRoot.empty())
-        opt.engine.mcrCacheRoot = req.mcrCacheRoot;
-    opt.engine.timeoutMs = req.timeoutMs;
-
-    ZeroDataImageHandle::ProcessingCallbacks tcb;
-    tcb.stage = [&](ZeroDataImageHandle::ProcessStage s) {
-        if (cb.onMessage)
-            cb.onMessage(stageName(s));
-    };
-    tcb.progress = [&](int p) {
-        if (cb.onProgress) {
-            const int shown = convertFirst ? 50 + p / 2 : p;
-            cb.onProgress(shown, stageName(ZeroDataImageHandle::ProcessStage::Processing));
-        }
-    };
-    tcb.log = [&](const std::string &m) {
-        if (cb.onMessage)
-            cb.onMessage(m);
-    };
-    tcb.shouldCancel = [&]() { return cb.isCancelled && cb.isCancelled(); };
-
-    ZeroDataImageHandle::Processor processor;
-    const ZeroDataImageHandle::ProcessingResult r = processor.process(opt, tcb);
-
-    resp.exitCode = r.exitCode;
-    resp.restoredBytes = r.restoredBytes;
-    resp.warnings = r.warnings;
-    resp.jobId = r.jobId;
-    resp.recordPath = r.recordPath;
-    resp.configPath = r.configPath;
-    resp.logPath = r.logPath;
-    resp.inputs.reserve(r.inputs.size());
-    for (std::size_t i = 0; i < r.inputs.size(); ++i) {
-        ZeroImageRestoredInput in;
-        in.sidecar = r.inputs[i].sidecar;
-        in.originalName = r.inputs[i].originalName;
-        in.sourceSha256 = r.inputs[i].sourceSha256;
-        in.originalSize = r.inputs[i].originalSize;
-        resp.inputs.push_back(in);
-    }
-    resp.publishedFiles.reserve(r.publishedFiles.size());
-    for (std::size_t i = 0; i < r.publishedFiles.size(); ++i) {
-        ZeroImagePublishedFile f;
-        f.path = r.publishedFiles[i].path;
-        f.suffix = r.publishedFiles[i].suffix;
-        f.bytes = r.publishedFiles[i].bytes;
-        resp.publishedFiles.push_back(f);
-    }
-
-    if (r.status == ZeroDataImageHandle::ProcessStatus::Canceled) {
+    if (!isDir(imageDir)) {
         if (err)
-            *err = r.error.empty() ? "已取消" : r.error;
+            *err = "成像输入目录不存在: " + imageDir;
         return false;
     }
-    if (!r.ok()) {
-        if (cb.onError && !r.error.empty())
-            cb.onError(r.error);
+
+    if (!req.requireEngine) {
+        if (cb.onMessage)
+            cb.onMessage("只还原，不启动成像");
+    }
+
+    std::string localErr;
+    const std::string exe = resolvePostExe(req, &localErr);
+    if (exe.empty()) {
         if (err)
-            *err = r.error.empty() ? "零级成像失败" : r.error;
+            *err = localErr;
         return false;
     }
+
+    const std::string outDir =
+        req.imageOutputDirectory.empty() ? imageDir : req.imageOutputDirectory;
+    if (hasSpace(imageDir) || hasSpace(outDir) || hasSpace(exe)) {
+        if (err)
+            *err = "路径不能含空格: " + (hasSpace(imageDir) ? imageDir : outDir);
+        return false;
+    }
+
+    std::vector<std::string> args;
+    args.push_back(exe);
+    args.push_back("--kind");
+    args.push_back(req.kind == 1 ? "isar" : "sar");
+    args.push_back("--input");
+    args.push_back(imageDir);
+    if (!req.imageOutputDirectory.empty()) {
+        args.push_back("--output");
+        args.push_back(req.imageOutputDirectory);
+    }
+    args.push_back("--begin");
+    args.push_back(std::to_string(req.parameters.beginId));
+    args.push_back("--last");
+    args.push_back(std::to_string(req.parameters.lastFileId));
+    args.push_back("--delta");
+    args.push_back(std::to_string(req.parameters.deltaNum));
+    args.push_back("--num");
+    args.push_back(std::to_string(req.parameters.fileNum));
+    args.push_back("--range-offset");
+    args.push_back(std::to_string(req.parameters.rangeOffset));
+    args.push_back("--nr");
+    args.push_back(std::to_string(req.parameters.rangePoints));
+    if (req.roiW > 0) {
+        args.push_back("--roi");
+        args.push_back(std::to_string(req.roiX));
+        args.push_back(std::to_string(req.roiY));
+        args.push_back(std::to_string(req.roiW));
+        if (req.roiH > 0)
+            args.push_back(std::to_string(req.roiH));
+    }
+    if (req.exportTxt)
+        args.push_back("--export-txt");
+    if (!req.requireEngine)
+        args.push_back("--restore-only");
+    if (req.keepWorkspace)
+        args.push_back("--keep-work");
+
+    const std::map<std::string, std::uint64_t> before = snapshotImages(outDir);
+    if (cb.onMessage)
+        cb.onMessage(req.requireEngine ? "调用 sarIsarPostProcess" : "调用 sarIsarPostProcess --restore-only");
+
+    const RunResult ran = runCommand(
+        args, req.timeoutMs, [&]() { return cb.isCancelled && cb.isCancelled(); },
+        [&](const std::string &line) {
+            if (cb.onMessage)
+                cb.onMessage(line);
+            const std::string tag = "[发布] ";
+            const std::size_t at = line.find(tag);
+            if (at == std::string::npos)
+                return;
+            std::string name = line.substr(at + tag.size());
+            const std::size_t sp = name.find(' ');
+            if (sp != std::string::npos)
+                name = name.substr(0, sp);
+            if (name.empty())
+                return;
+            const std::string full = name[0] == '/' ? name : joinPath(outDir, name);
+            struct stat st;
+            if (::stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode))
+                return;
+            ZeroImagePublishedFile f;
+            f.path = full;
+            f.suffix = suffixOf(full);
+            f.bytes = static_cast<std::uint64_t>(st.st_size);
+            resp.publishedFiles.push_back(f);
+        });
+
+    resp.exitCode = ran.exitCode;
+    if (ran.exitCode == -2) {
+        if (err)
+            *err = "已取消";
+        return false;
+    }
+    if (ran.exitCode == -3) {
+        if (err)
+            *err = "后处理超时";
+        return false;
+    }
+    if (ran.exitCode != 0) {
+        std::string why = exitText(ran.exitCode < 0 ? 0 : ran.exitCode);
+        if (ran.exitCode >= 1 && ran.exitCode <= 6)
+            why = exitText(ran.exitCode);
+        else if (ran.exitCode != 0)
+            why = "后处理程序退出码 " + std::to_string(ran.exitCode);
+        if (err)
+            *err = why;
+        if (cb.onError)
+            cb.onError(why);
+        return false;
+    }
+    if (resp.publishedFiles.empty())
+        collectPublished(outDir, before, resp.publishedFiles);
     if (cb.onProgress)
-        cb.onProgress(100, "零级成像完成");
+        cb.onProgress(100, req.requireEngine ? "零级成像完成" : "还原完成");
     return true;
 }
 
@@ -357,7 +687,8 @@ bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderRe
             return false;
         }
         const std::string sourcePath = joinPath(req.sourceDirectory, names[static_cast<std::size_t>(i)]);
-        const std::string outputBase = joinPath(req.outputDirectory, fileStem(names[static_cast<std::size_t>(i)]) + "_L0.dat");
+        const std::string outputBase =
+            joinPath(req.outputDirectory, fileStem(names[static_cast<std::size_t>(i)]) + "_L0.dat");
         if (!bases.insert(outputBase).second) {
             if (err)
                 *err = "输出基路径冲突: " + outputBase;
@@ -365,7 +696,8 @@ bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderRe
         }
 
         if (cb.onMessage)
-            cb.onMessage("转换 " + std::to_string(i + 1) + "/" + std::to_string(total) + ": " + names[static_cast<std::size_t>(i)]);
+            cb.onMessage("转换 " + std::to_string(i + 1) + "/" + std::to_string(total) + ": "
+                         + names[static_cast<std::size_t>(i)]);
 
         ToZeroDataRequest treq;
         treq.sourcePath = sourcePath;
@@ -379,7 +711,8 @@ bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderRe
         tcb.onProgress = [&](int p, const std::string &m) {
             if (!cb.onProgress)
                 return;
-            const int shown = static_cast<int>((50LL * (static_cast<long long>(i) * 100 + p)) / (total * 100));
+            const int shown =
+                static_cast<int>((50LL * (static_cast<long long>(i) * 100 + p)) / (total * 100));
             cb.onProgress(shown, m);
         };
 
@@ -402,12 +735,16 @@ bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderRe
     ireq.parameters = req.parameters;
     ireq.engineDirectory = req.engineDirectory;
     ireq.engineExecutable = req.engineExecutable;
-    ireq.mcrRoot = req.mcrRoot;
-    ireq.mcrCacheRoot = req.mcrCacheRoot;
     ireq.timeoutMs = req.timeoutMs;
     ireq.requireEngine = req.requireEngine;
     ireq.keepWorkspace = req.keepWorkspace;
     ireq.kind = req.kind;
+    ireq.roiX = req.roiX;
+    ireq.roiY = req.roiY;
+    ireq.roiW = req.roiW;
+    ireq.roiH = req.roiH;
+    ireq.exportTxt = req.exportTxt;
+    ireq.imageOutputDirectory = req.imageOutputDirectory;
 
     Callbacks icb;
     icb.onMessage = cb.onMessage;
@@ -426,5 +763,119 @@ bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderRe
 
 std::string zeroImageSidecarPath(const std::string &polarizedPath)
 {
-    return ZeroDataImageHandle::Processor::sidecarPathForPolarizedFile(polarizedPath);
+    std::string path = polarizedPath;
+    const std::size_t slash = path.find_last_of('/');
+    const std::string dir = slash == std::string::npos ? std::string() : path.substr(0, slash + 1);
+    std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    const std::size_t dot = name.find_last_of('.');
+    std::string stem = dot == std::string::npos ? name : name.substr(0, dot);
+    const char *pols[] = {"_HH", "_VV", "_HV", "_VH"};
+    for (int i = 0; i < 4; ++i) {
+        const std::string pol = pols[i];
+        if (stem.size() >= pol.size()
+            && stem.compare(stem.size() - pol.size(), pol.size(), pol) == 0) {
+            stem.erase(stem.size() - pol.size());
+            break;
+        }
+    }
+    return dir + stem + ".sarrec";
+}
+
+bool exportSliceTxt(const SliceTxtRequest &req, SliceTxtResponse &resp, Callbacks &cb,
+                    std::string *err)
+{
+    resp = SliceTxtResponse();
+    if (req.imagePath.empty()) {
+        if (err)
+            *err = "imagePath 为空";
+        return false;
+    }
+    if (hasSpace(req.imagePath) || hasSpace(req.outPath)) {
+        if (err)
+            *err = "路径不能含空格";
+        return false;
+    }
+    std::string root = req.engineDirectory;
+    if (!root.empty() && !isDir(root)) {
+        if (err)
+            *err = "引擎目录不存在: " + root;
+        return false;
+    }
+    if (root.empty())
+        root = defaultPostRoot();
+    const std::string exe = exporterIn(root);
+    if (exe.empty()) {
+        if (err)
+            *err = "未找到 SarTxtExporter";
+        return false;
+    }
+    std::vector<std::string> args;
+    args.push_back(exe);
+    args.push_back(req.imagePath);
+    if (req.roiW > 0) {
+        args.push_back("--roi");
+        args.push_back(std::to_string(req.roiX));
+        args.push_back(std::to_string(req.roiY));
+        args.push_back(std::to_string(req.roiW));
+        if (req.roiH > 0)
+            args.push_back(std::to_string(req.roiH));
+    }
+    if (!req.outPath.empty()) {
+        args.push_back("--out");
+        args.push_back(req.outPath);
+    }
+    if (!req.taskName.empty()) {
+        args.push_back("--task-name");
+        args.push_back(req.taskName);
+    }
+    if (!req.taskLeader.empty()) {
+        args.push_back("--task-leader");
+        args.push_back(req.taskLeader);
+    }
+    if (!req.targetName.empty()) {
+        args.push_back("--target-name");
+        args.push_back(req.targetName);
+    }
+    if (cb.onMessage)
+        cb.onMessage("调用 SarTxtExporter");
+    const RunResult ran = runCommand(
+        args, req.timeoutMs, [&]() { return cb.isCancelled && cb.isCancelled(); },
+        [&](const std::string &line) {
+            if (cb.onMessage)
+                cb.onMessage(line);
+            const std::string tag = "输出目标路径:";
+            const std::size_t at = line.find(tag);
+            if (at != std::string::npos) {
+                std::string p = line.substr(at + tag.size());
+                while (!p.empty() && (p[0] == ' ' || p[0] == '\t'))
+                    p.erase(p.begin());
+                resp.txtPath = p;
+            }
+        });
+    resp.exitCode = ran.exitCode;
+    if (ran.exitCode == -2) {
+        if (err)
+            *err = "已取消";
+        return false;
+    }
+    if (ran.exitCode != 0) {
+        if (err)
+            *err = ran.exitCode == 1 ? "切片导出失败" : "SarTxtExporter 退出码 " + std::to_string(ran.exitCode);
+        return false;
+    }
+    if (resp.txtPath.empty()) {
+        if (!req.outPath.empty())
+            resp.txtPath = req.outPath;
+        else {
+            std::string base = req.imagePath;
+            const std::size_t dot = base.find_last_of('.');
+            const std::size_t slash = base.find_last_of('/');
+            if (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+                base = base.substr(0, dot);
+            resp.txtPath = base + ".txt";
+        }
+    }
+    if (cb.onProgress)
+        cb.onProgress(100, "切片报表已导出");
+    return true;
 }

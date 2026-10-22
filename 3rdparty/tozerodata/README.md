@@ -1,8 +1,8 @@
-# ToZeroData 标准 C++11 库调用说明
+# ToZeroData 标准 C++11 动态库调用说明
 
 **版本说明：本文档基于命令行版本（main.cpp），使用标准 C++11，所有字符串为 std::string，文件流为 std::ifstream/std::ofstream，不依赖 Qt。**
 
-本包包含 libToZeroDataCpp11.so、libToZeroDataCpp11.a、公开头文件和命令行 demo 源码，不包含核心转换源码。无需 Qt、qmake、OpenSSL 或其他第三方开发库；需要 C++11 编译器、CMake 和系统线程支持。Linux 的目录创建和不覆盖文件提交由薄的平台适配层实现，数据读写均为标准文件流。
+本包包含 libToZeroDataCpp11.so、公开头文件和命令行 demo 源码，不包含核心转换源码。无需 Qt、qmake、OpenSSL 或其他第三方开发库；需要 C++11 编译器、CMake 和系统线程支持。Linux 的目录创建和不覆盖文件提交由薄的平台适配层实现，数据读写均为标准文件流。
 
 ## 编译和运行示例
 
@@ -18,23 +18,12 @@ bash run_demo.sh --source /data/source.dat --output-base /data/output/source_L0.
 
 ## 在甲方 C++ 工程中链接
 
-共享库（运行期需要 .so 与 LD_LIBRARY_PATH）：
-
 ```bash
 g++ -std=c++11 your_main.cpp -I/path/to/sdk/include -L/path/to/sdk/lib -lToZeroDataCpp11 -pthread -o your_app
 LD_LIBRARY_PATH=/path/to/sdk/lib ./your_app
 ```
 
-静态库（编译期把 .a 链入可执行文件，运行期不依赖 .so，也不需要 LD_LIBRARY_PATH）：
-
-```bash
-g++ -std=c++11 your_main.cpp -I/path/to/sdk/include /path/to/sdk/lib/libToZeroDataCpp11.a -pthread -o your_app
-./your_app
-```
-
-静态链接同样必须带 -pthread，库内部使用 std::thread 与 std::mutex。libToZeroDataCpp11.a 与共享库同名，由同一份源码、同一编译参数生成，接口与行为一致。
-
-也可按 demo/CMakeLists.txt 将库作为 IMPORTED target 接入 CMake；加 -DTOZERODATA_USE_STATIC=ON 可选用静态库。不要编译核心转换源码，不要使用旧 Qt 版头文件。库和调用方必须使用兼容的架构、编译器、libstdc++ ABI、标准库与 libc 环境；构建信息见 BUILD_INFO.txt。该接口含 std::string 和 STL 类型，属于 C++ ABI，不是跨编译器的 C ABI。
+也可按 demo/CMakeLists.txt 将共享库作为 IMPORTED target 接入 CMake。不要编译核心转换源码，不要使用旧 Qt 版头文件。动态库和调用方必须使用兼容的架构、编译器、libstdc++ ABI、标准库与 libc 环境；构建信息见 BUILD_INFO.txt。该接口含 std::string 和 STL 类型，属于 C++ ABI，不是跨编译器的 C ABI。
 
 ## 最小调用
 

@@ -58,7 +58,7 @@ cd build_linux && ctest --output-on-failure
 | `RCS_USE_SDK` | **OFF** | ON 时 GUI/CLI 链 `sdk/`（需当前平台已有库）。Windows 一键脚本固定 OFF |
 | `RCS_SDK_ROOT` | `sdk/` | SDK 根目录 |
 | `RCS_BUILD_GUI` | ON | Qt 界面 |
-| `RCS_ENABLE_TOZERODATA` | **ON**（Linux） | 源 DAT 转 L0 并成像。运行还需 MATLAB Runtime v9.3（客户包 `SAR-SDK/runtime`，`bash runtime/install_mcr.sh`）与 `engine/for_testing` |
+| `RCS_ENABLE_TOZERODATA` | **ON**（Linux） | 源 DAT 转 L0 后调用 `engine/bin/sarIsarPostProcess` 成像。`libToZeroDataCpp11.so` 必须与 `librcs_proc.so` 放在同一目录。不需要 MATLAB |
 | `RCS_TIFF_PREFER_STATIC` | ON | 静态链 libtiff（完整库含拼接，需 libtiff） |
 
 ```bash

@@ -1,6 +1,5 @@
 Linux 5.15.0-52-generic x86_64
 C++ standard: 11, Qt dependency: none
-Libraries: libToZeroDataCpp11.so (shared), libToZeroDataCpp11.a (static)
 c++ (Kylin 9.3.0-10kylin5k0.5) 9.3.0
 Copyright (C) 2019 Free Software Foundation, Inc.
 This is free software; see the source for copying conditions.  There is NO

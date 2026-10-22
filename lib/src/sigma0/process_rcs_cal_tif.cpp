@@ -1,12 +1,18 @@
+#include "Level2Pdat.h"
 #include "Util.hpp"
 #include "rcs/rcs_api.h"
 
+#include <iconv.h>
+
+#include <cstdint>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <map>
 #include <queue>
 #include <regex>
 #include <sstream>
@@ -320,11 +326,6 @@ bool writeTiffInt16(const std::string &path, int w, int h, const std::vector<int
     return true;
 }
 
-std::string fieldLine(const std::string &k, const std::string &v)
-{
-    return k + " = " + v + "\r\n";
-}
-
 std::string nowPretty()
 {
     const time_t t = time(0);
@@ -357,22 +358,6 @@ std::string fileTimeStamp(const std::string &path)
     return buf;
 }
 
-std::string uniqTxtPath(const std::string &dir, const std::string &stem, const std::string &fallback)
-{
-    std::string p = pathJoin(dir, stem + ".txt");
-    if (!pathExists(p))
-        return p;
-    p = pathJoin(dir, stem + "_" + fallback + ".txt");
-    int n = 1;
-    while (pathExists(p)) {
-        ++n;
-        char buf[16];
-        std::snprintf(buf, sizeof(buf), "%d", n);
-        p = pathJoin(dir, stem + "_" + fallback + "_" + buf + ".txt");
-    }
-    return p;
-}
-
 bool nameHasToken(const std::string &name, const std::string &tok)
 {
     if (tok.empty())
@@ -382,86 +367,380 @@ bool nameHasToken(const std::string &name, const std::string &tok)
     return u.find(t) != std::string::npos;
 }
 
-bool writeL3Txt(const std::string &path, int nr, int na, const std::vector<float> &dbsm, int layout,
-                const Level3Info &info, std::string *err)
+bool endsWithI(const std::string &s, const std::string &suf)
 {
-    std::ostringstream hdr;
-    hdr << "[TASK]\r\n"
-        << fieldLine("任务名称", info.taskName.empty() ? "SAR二维像RCS定标" : info.taskName)
-        << fieldLine("任务负责人", info.operatorName) << fieldLine("任务单位", info.unit)
-        << fieldLine("任务代号", info.code) << fieldLine("任务来源", info.source)
-        << fieldLine("数据来源", info.dataSource.empty() ? "实测原始回波(.raw)辐射定标" : info.dataSource)
-        << fieldLine("数据类型", info.dataType.empty() ? "3级 RCS 二维像(dBsm)" : info.dataType)
-        << fieldLine("任务执行地点", info.place)
-        << fieldLine("任务执行时间", info.time.empty() ? nowPretty() : info.time)
-        << fieldLine("定标形式", info.calMode.empty() ? "角反射器能量(积分)法" : info.calMode)
-        << fieldLine("定标体名称", info.calName.empty() ? "角反射器" : info.calName)
-        << fieldLine("定标体尺寸", info.calSize) << fieldLine("不确定度", info.uncertainty)
-        << "[/TASK]\r\n"
-        << "[TARGET]\r\n"
-        << fieldLine("目标名称", info.tgtName) << fieldLine("目标说明", info.tgtDesc)
-        << fieldLine("目标分类", info.tgtClass) << fieldLine("目标长(m)", info.tgtL)
-        << fieldLine("目标宽(m)", info.tgtW) << fieldLine("目标高(m)", info.tgtH)
-        << "[/TARGET]\r\n"
-        << "[SYSTEM]\r\n"
-        << fieldLine("设备名称", info.devName) << fieldLine("设备分类", info.devClass)
-        << fieldLine("工作体制", info.sysMode) << fieldLine("脉冲宽度(μs)", info.pulseWidth)
-        << fieldLine("脉冲重复频率", info.prf) << fieldLine("动态范围(dB)", info.dynRange)
-        << "[/SYSTEM]\r\n"
-        << "[ENVIRONMENT]\r\n"
-        << fieldLine("温度(℃)", info.temp) << fieldLine("湿度(%)", info.humidity)
-        << fieldLine("气压(hPa)", info.pressure) << fieldLine("能见度(km)", info.visibility)
-        << fieldLine("云况", info.cloud) << "[/ENVIRONMENT]\r\n"
-        << "[CONDITIONS]\r\n"
-        << fieldLine("测量时刻", info.measureTime) << fieldLine("频率步长(GHz)", info.fStep)
-        << fieldLine("起始频率(GHz)", info.fStart) << fieldLine("终止频率(GHz)", info.fStop)
-        << fieldLine("极化组合", info.pol) << fieldLine("目标高度(m)", info.tgtHeight)
-        << fieldLine("起始入射方位视向角(°)", info.azStart)
-        << fieldLine("终止入射方位视向角(°)", info.azStop)
-        << fieldLine("起始入射俯仰视向角(°)", info.elStart)
-        << fieldLine("终止入射俯仰视向角(°)", info.elStop)
-        << fieldLine("回波采样率", info.fs) << fieldLine("备注", info.note) << "[/CONDITIONS]\r\n";
-
-    std::string header = hdr.str();
-    if (static_cast<int>(header.size()) > kL3HdrBytes) {
-        // 超长仍写，不再硬失败（与 MATLAB 警告一致）
-    } else {
-        header.append(static_cast<size_t>(kL3HdrBytes - static_cast<int>(header.size())), ' ');
+    if (s.size() < suf.size())
+        return false;
+    for (size_t i = 0; i < suf.size(); ++i) {
+        unsigned char a = static_cast<unsigned char>(s[s.size() - suf.size() + i]);
+        unsigned char b = static_cast<unsigned char>(suf[i]);
+        if (std::tolower(a) != std::tolower(b))
+            return false;
     }
+    return true;
+}
+
+std::string polTokenOf(const std::string &name, const std::string &reqPol)
+{
+    const std::string req = toUpperStr(trimStr(reqPol));
+    if (!req.empty())
+        return req;
+    const std::string u = toUpperStr(name);
+    const char *pols[] = {"HH", "HV", "VH", "VV"};
+    for (int i = 0; i < 4; ++i) {
+        if (u.find(std::string("_") + pols[i]) != std::string::npos)
+            return pols[i];
+    }
+    return std::string();
+}
+
+std::string findL0HeaderFile(const std::string &folder, const std::string &pol)
+{
+    std::vector<std::string> names = listFileNames(folder);
+    std::sort(names.begin(), names.end());
+    const std::string polU = toUpperStr(trimStr(pol));
+    std::string fallback;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (!endsWithI(names[i], ".dat"))
+            continue;
+        const std::string u = toUpperStr(names[i]);
+        if (!polU.empty() && u.find("_" + polU) == std::string::npos)
+            continue;
+        const std::string full = pathJoin(folder, names[i]);
+        if (u.find("_L0_") != std::string::npos)
+            return full;
+        if (fallback.empty())
+            fallback = full;
+    }
+    return fallback;
+}
+
+bool loadL0Heads(const std::string &path, std::vector<uint8_t> &fileHdr, std::vector<uint8_t> &frame0,
+                 std::string *err)
+{
+    std::vector<uint8_t> all;
+    if (!readFileAll(path, all) || all.size() < 768) {
+        if (err)
+            *err = "无法读取 0 级头（需要至少 768 字节）: " + path;
+        return false;
+    }
+    fileHdr.assign(all.begin(), all.begin() + 512);
+    frame0.assign(all.begin() + 512, all.begin() + 768);
+    return true;
+}
+
+std::string pdatPathForTxt(const std::string &txt)
+{
+    if (endsWithI(txt, ".txt"))
+        return txt.substr(0, txt.size() - 4) + ".pdat";
+    return txt + ".pdat";
+}
+
+void appendNote(std::string &note, const std::string &extra)
+{
+    if (extra.empty())
+        return;
+    if (!note.empty())
+        note += "; ";
+    note += extra;
+}
+
+int utf8DispWidth(const std::string &s)
+{
+    int w = 0;
+    for (std::size_t i = 0; i < s.size();) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        std::uint32_t cp = c;
+        std::size_t n = 1;
+        if ((c & 0x80) == 0) {
+            n = 1;
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < s.size()) {
+            n = 2;
+            cp = ((c & 0x1F) << 6) | (static_cast<unsigned char>(s[i + 1]) & 0x3F);
+        } else if ((c & 0xF0) == 0xE0 && i + 2 < s.size()) {
+            n = 3;
+            cp = ((c & 0x0F) << 12) | ((static_cast<unsigned char>(s[i + 1]) & 0x3F) << 6)
+                 | (static_cast<unsigned char>(s[i + 2]) & 0x3F);
+        } else if ((c & 0xF8) == 0xF0 && i + 3 < s.size()) {
+            n = 4;
+            cp = ((c & 0x07) << 18) | ((static_cast<unsigned char>(s[i + 1]) & 0x3F) << 12)
+                 | ((static_cast<unsigned char>(s[i + 2]) & 0x3F) << 6)
+                 | (static_cast<unsigned char>(s[i + 3]) & 0x3F);
+        }
+        w += (cp >= 0x80) ? 2 : 1;
+        i += n;
+    }
+    return w;
+}
+
+std::string padRightDisp(const std::string &s, int width)
+{
+    const int w = utf8DispWidth(s);
+    if (w >= width)
+        return s;
+    return s + std::string(static_cast<std::size_t>(width - w), ' ');
+}
+
+std::string padLeftAscii(const std::string &s, int width)
+{
+    if (static_cast<int>(s.size()) >= width)
+        return s;
+    return std::string(static_cast<std::size_t>(width - static_cast<int>(s.size())), ' ') + s;
+}
+
+bool utf8ToGbk(const std::string &in, std::string &out, std::string *err)
+{
+    iconv_t cd = ::iconv_open("GBK", "UTF-8");
+    if (cd == reinterpret_cast<iconv_t>(-1)) {
+        if (err)
+            *err = "系统无法把文本转为 GBK";
+        return false;
+    }
+    std::string src = in;
+    std::size_t inleft = src.size();
+    const std::size_t cap = src.size() * 4 + 32;
+    out.assign(cap, '\0');
+    char *ip = src.empty() ? 0 : &src[0];
+    char *op = &out[0];
+    std::size_t oleft = cap;
+    const std::size_t rc = ::iconv(cd, &ip, &inleft, &op, &oleft);
+    ::iconv_close(cd);
+    if (rc == static_cast<std::size_t>(-1)) {
+        if (err)
+            *err = "三级文本含有 GBK 无法表示的字符";
+        return false;
+    }
+    out.resize(cap - oleft);
+    return true;
+}
+
+std::string dsarField(const std::string &name, const std::string &value)
+{
+    return std::string("\t\t") + name + "=" + value + "\r\n";
+}
+
+bool clampRoi(const RectRoi &roi, int nr, int na, int &x, int &y, int &w, int &h)
+{
+    if (!roi.valid() || nr <= 0 || na <= 0)
+        return false;
+    x = roi.x;
+    y = roi.y;
+    w = roi.w;
+    h = roi.h;
+    if (x < 0) {
+        w += x;
+        x = 0;
+    }
+    if (y < 0) {
+        h += y;
+        y = 0;
+    }
+    if (x >= na || y >= nr)
+        return false;
+    if (x + w > na)
+        w = na - x;
+    if (y + h > nr)
+        h = nr - y;
+    return w > 0 && h > 0;
+}
+
+std::string siblingCplx(const std::string &rawPath)
+{
+    const std::string::size_type slash = rawPath.find_last_of('/');
+    const std::string::size_type dot = rawPath.find_last_of('.');
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+        return std::string();
+    const std::string stem = rawPath.substr(0, dot);
+    const char *exts[] = {".cplx", ".CPLX"};
+    for (int i = 0; i < 2; ++i) {
+        const std::string p = stem + exts[i];
+        std::ifstream in(p.c_str(), std::ios::binary);
+        if (in)
+            return p;
+    }
+    return std::string();
+}
+
+bool loadMergeDistances(const std::string &path, int nPts, std::vector<double> &xy, std::string *note)
+{
+    xy.clear();
+    std::ifstream in(path.c_str(), std::ios::in | std::ios::binary);
+    if (!in) {
+        if (note)
+            *note = "打不开距离文件: " + path;
+        return false;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line[line.size() - 1] == '\r')
+            line.erase(line.size() - 1);
+        for (std::size_t i = 0; i < line.size(); ++i) {
+            if (line[i] == '\t' || line[i] == ',')
+                line[i] = ' ';
+        }
+        std::istringstream iss(line);
+        double a = 0, b = 0;
+        if (!(iss >> a >> b))
+            continue;
+        xy.push_back(a);
+        xy.push_back(b);
+    }
+    if (static_cast<int>(xy.size() / 2) != nPts) {
+        if (note)
+            *note = "距离文件行数 " + std::to_string(static_cast<int>(xy.size() / 2)) + " 与点数 "
+                    + std::to_string(nPts) + " 不一致，横向/径向留空";
+        xy.clear();
+        return false;
+    }
+    return true;
+}
+
+bool writeDsar(const std::string &path, int nRow, int nCol, const std::vector<float> &grid,
+               const std::vector<double> *xy, const std::string &tgtName, const std::string &pol,
+               const std::string &date, const std::string &measureTime, double fsHz, bool sized,
+               double stepM, std::string *err)
+{
+    if (nRow <= 0 || nCol <= 0
+        || grid.size() < static_cast<std::size_t>(nRow) * static_cast<std::size_t>(nCol)) {
+        if (err)
+            *err = "三级数据尺寸无效";
+        return false;
+    }
+    const char *task[] = {"任务名称",     "任务负责人", "任务单位", "任务来源", "数据来源",
+                          "数据类型",     "任务执行地点", "任务执行日期", "定标形式", "定标体名称",
+                          "定标体尺寸",   "不确定度",   "备注"};
+    const char *taskVal[] = {"", "", "", "", "实测原始回波(.raw)辐射定标", "SAR", "", "",
+                             "角反射器能量(积分)法", "角反射器", "", "", ""};
+    const char *target[] = {"目标名称", "目标说明", "目标分类", "目标长(m)", "目标宽(m)", "目标高(m)",
+                            "目标发动机说明", "目标结构特点说明", "目标电磁隐身措施说明",
+                            "目标红外隐身措施说明", "备注"};
+    const char *system[] = {"设备名称", "设备分类", "工作机制", "发射机峰值功率(W)", "脉冲宽度(μs)",
+                            "脉冲重复频率", "天线形式", "天线H面宽(°)", "天线E面宽(°)", "天线增益(dB)",
+                            "天线的极化隔离度(dB)", "动态范围(dB)", "接收通道稳定性(dB)",
+                            "接收通道非线性度(dB)", "瞬时带宽(GHz)", "角跟踪或随动精度(mrad)",
+                            "测距精度(m)", "备注"};
+    const char *env[] = {"温度(℃)", "湿度(%)", "气压(hPa)", "能见度(km)", "云况", "备注"};
+    const char *cond[] = {"测量时刻", "极化组合", "成像带宽(GHz)", "目标飞行高度(m)", "目标飞行马赫数",
+                          "目标飞行动作", "目标发动机工况", "目标真航向(°)", "目标俯仰角(°)",
+                          "目标横滚角(°)", "雷达距离(m)", "起始方位视向角(°)", "终止方位视向角(°)",
+                          "起始俯仰视向角(°)", "终止俯仰视向角(°)", "脉冲积累个数", "脉冲步进间隔",
+                          "横向像素点数", "径向像素点数", "横向尺寸(m)", "径向尺寸(m)", "中心经度(°)",
+                          "中心纬度(°)", "目标姿态采样率", "雷达回波采样率", "雷达跟踪采样率", "备注"};
+
+    std::ostringstream hdr;
+    hdr << "#DSAR\r\n// 动态SAR数据\r\n// (Dynamic Synthetic Aperture Radar Data Of Target)\r\n";
+    hdr << "[TASK]\r\n";
+    for (int i = 0; i < 13; ++i) {
+        std::string v = taskVal[i];
+        if (std::string(task[i]) == "任务执行日期")
+            v = date;
+        hdr << dsarField(task[i], v);
+    }
+    hdr << "[/TASK]\r\n[TARGET]\r\n";
+    for (int i = 0; i < 11; ++i) {
+        std::string v;
+        if (std::string(target[i]) == "目标名称")
+            v = tgtName;
+        hdr << dsarField(target[i], v);
+    }
+    hdr << "[/TARGET]\r\n[SYSTEM]\r\n";
+    for (int i = 0; i < 18; ++i)
+        hdr << dsarField(system[i], "");
+    hdr << "[/SYSTEM]\r\n[ENVIRONMENT]\r\n";
+    for (int i = 0; i < 6; ++i)
+        hdr << dsarField(env[i], "");
+    hdr << "[/ENVIRONMENT]\r\n[CONDITIONS]\r\n";
+    char num[64];
+    for (int i = 0; i < 27; ++i) {
+        const std::string key = cond[i];
+        std::string v;
+        if (key == "测量时刻")
+            v = measureTime;
+        else if (key == "极化组合")
+            v = pol;
+        else if (key == "横向像素点数")
+            v = std::to_string(nCol);
+        else if (key == "径向像素点数")
+            v = std::to_string(nRow);
+        else if (key == "横向尺寸(m)" && sized && nCol > 1) {
+            std::snprintf(num, sizeof(num), "%.6f", (nCol - 1) * stepM);
+            v = num;
+        } else if (key == "径向尺寸(m)" && sized && nRow > 1) {
+            std::snprintf(num, sizeof(num), "%.6f", (nRow - 1) * stepM);
+            v = num;
+        } else if (key == "雷达回波采样率" && fsHz > 0) {
+            std::snprintf(num, sizeof(num), "%.6g", fsHz);
+            v = num;
+        }
+        hdr << dsarField(key, v);
+    }
+    hdr << "[/CONDITIONS]\r\n";
+
+    std::string headerGbk;
+    if (!utf8ToGbk(hdr.str(), headerGbk, err))
+        return false;
+    if (headerGbk.size() < static_cast<std::size_t>(kL3HdrBytes))
+        headerGbk.append(static_cast<std::size_t>(kL3HdrBytes) - headerGbk.size(), ' ');
 
     std::ostringstream data;
-    data << "[DATA]\r\n";
-    data << "RCS[" << nr << "，" << na << "]\r\n";
-    char num[64];
-    if (layout == rcs::RcsCalL3Row) {
-        for (int r = 0; r < nr; ++r) {
-            for (int c = 0; c < na; ++c) {
-                if (c)
-                    data << ' ';
-                std::snprintf(num, sizeof(num), "%.3f",
-                              dbsm[static_cast<size_t>(r) * na + c]);
-                data << num;
+    data << "[DATA]\r\n\t\t" << padRightDisp("横向距离(m)", 13) << "\t\t" << padRightDisp("径向距离(m)", 13)
+         << "\t\t" << padRightDisp("IMG(dBsm)", 13) << "\t\t" << padRightDisp("相位(°)", 9) << "\r\n";
+    const std::string blank13(13, ' ');
+    const std::string phase = padLeftAscii("0", 9);
+    const bool useXy = xy && xy->size() >= static_cast<std::size_t>(nRow) * nCol * 2;
+    for (int c = 0; c < nCol; ++c) {
+        for (int r = 0; r < nRow; ++r) {
+            const float db = grid[static_cast<std::size_t>(r) * nCol + c];
+            std::snprintf(num, sizeof(num), "%.6f", db);
+            std::string xs = blank13;
+            std::string ys = blank13;
+            if (useXy) {
+                const std::size_t k = static_cast<std::size_t>(c) * nRow + r;
+                char xb[64], yb[64];
+                std::snprintf(xb, sizeof(xb), "%.6f", (*xy)[k * 2]);
+                std::snprintf(yb, sizeof(yb), "%.6f", (*xy)[k * 2 + 1]);
+                xs = padLeftAscii(xb, 13);
+                ys = padLeftAscii(yb, 13);
             }
-            data << "\r\n";
-        }
-    } else {
-        for (int r = 0; r < nr; ++r) {
-            for (int c = 0; c < na; ++c) {
-                std::snprintf(num, sizeof(num), "%d %d %.3f\r\n", r + 1, c + 1,
-                              dbsm[static_cast<size_t>(r) * na + c]);
-                data << num;
-            }
+            data << "\t\t" << xs << "\t\t" << ys << "\t\t" << padLeftAscii(num, 13) << "\t\t" << phase
+                 << "\r\n";
         }
     }
     data << "[/DATA]\r\n";
-
-    std::string all = header + data.str();
+    std::string dataGbk;
+    if (!utf8ToGbk(data.str(), dataGbk, err))
+        return false;
+    const std::string all = headerGbk + dataGbk;
     if (!writeFileAll(path, all.data(), all.size())) {
         if (err)
             *err = "无法写三级 txt: " + path;
         return false;
     }
     return true;
+}
+
+bool writePositionFile(const std::string &path, const std::string &rawName, int nr, int na, int x,
+                       int y, int w, int h, const std::string &l3Name)
+{
+    const int cx = x + (w - 1) / 2;
+    const int cy = y + (h - 1) / 2;
+    std::ostringstream os;
+    os << "#目标位置\r\n"
+       << "中心列=" << cx << "\r\n"
+       << "中心行=" << cy << "\r\n"
+       << "横向宽度=" << w << "\r\n"
+       << "径向高度=" << h << "\r\n"
+       << "roi=" << cx << " " << cy << " " << w << " " << h << "\r\n"
+       << "原点=左上角，列是方位向，行是距离向，从 0 开始\r\n"
+       << "图像文件=" << rawName << "\r\n"
+       << "图像尺寸=径向行数" << nr << ", 横向列数" << na << "\r\n"
+       << "选框范围=径向行" << y << "~" << (y + h - 1) << ", 横向列" << x << "~" << (x + w - 1) << "\r\n"
+       << "对应3级数据文件=" << l3Name << "\r\n";
+    std::string gbk;
+    if (!utf8ToGbk(os.str(), gbk, 0))
+        gbk = os.str();
+    return writeFileAll(path, gbk.data(), gbk.size());
 }
 
 } // namespace
@@ -573,6 +852,22 @@ bool processRcsCalTif(const RcsCalTifRequest &req0, RcsCalTifResponse &resp, Cal
     resp.peakRow = peakRow;
     resp.peakCol = peakCol;
 
+    struct L0Heads {
+        std::vector<uint8_t> fileHdr;
+        std::vector<uint8_t> frame0;
+    };
+    std::map<std::string, L0Heads> l0Cache;
+    L0Heads fixedHeads;
+    const bool haveFixed = !trimStr(req.l0HeaderPath).empty();
+    if (haveFixed) {
+        std::string localErr;
+        if (!loadL0Heads(req.l0HeaderPath, fixedHeads.fileHdr, fixedHeads.frame0, &localErr)) {
+            if (err)
+                *err = localErr;
+            return false;
+        }
+    }
+
     // 列目录
     progress(cb, 20, "扫描 RAW…");
     std::vector<std::string> names = listFileNames(req.rawFolder);
@@ -600,6 +895,27 @@ bool processRcsCalTif(const RcsCalTifRequest &req0, RcsCalTifResponse &resp, Cal
     int nF = static_cast<int>(raws.size());
     if (req.maxFiles > 0 && req.maxFiles < nF)
         nF = req.maxFiles;
+
+    RectRoi targetRoi = req.targetRoi;
+    if (!targetRoi.valid() && cb.onRectRoi && nF > 0) {
+        const std::string firstPath = pathJoin(req.rawFolder, raws[0]);
+        int nr0 = 0, na0 = 0;
+        std::vector<uint16_t> firstImg;
+        std::string localErr;
+        if (parseNrNa(raws[0], nr0, na0) && loadRawU16LE(firstPath, nr0, na0, firstImg, &localErr)) {
+            const GrayImage preview = makePreview(firstImg, nr0, na0, 8);
+            RectRoi picked;
+            if (cb.onRectRoi(preview, nr0, na0, "target", picked) && picked.valid())
+                targetRoi = picked;
+            else if (cancelled(cb)) {
+                if (err)
+                    *err = "已取消";
+                return false;
+            } else {
+                message(cb, "未框选目标，三级数据写全图");
+            }
+        }
+    }
 
     for (int i = 0; i < nF; ++i) {
         if (cancelled(cb)) {
@@ -683,36 +999,141 @@ bool processRcsCalTif(const RcsCalTifRequest &req0, RcsCalTifResponse &resp, Cal
         }
 
         {
-            Level3Info info = req.header;
-            if (info.tgtName.empty())
-                info.tgtName = req.tgtName.empty() ? "目标" : req.tgtName;
-            if (info.pol.empty())
-                info.pol = req.pol;
-            if (info.fs.empty()) {
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%.6g Hz", req.fsHz);
-                info.fs = buf;
-            }
-            if (info.measureTime.empty())
-                info.measureTime = nowPretty();
-            if (info.time.empty())
-                info.time = nowPretty();
-            {
-                char note[512];
-                std::snprintf(note, sizeof(note),
-                              "波段=%s; 极化=%s; K=%.6e; R_near=%.2f; Rbin=%.6f; sigma_cal=%.4f m2(%.3f "
-                              "dBsm); 第1行=远端",
-                              req.band.c_str(), info.pol.c_str(), K, R_near, RbinUse, sigma_cal,
-                              req.sigmaTheoryDb);
-                if (info.note.empty())
-                    info.note = note;
-            }
+            const std::string tgtName = req.tgtName.empty() ? "目标" : req.tgtName;
+            std::string polName = req.pol;
+            if (polName.empty())
+                polName = polTokenOf(name, req.pol);
             const std::string stamp = fileTimeStamp(fPath);
-            const std::string stemL3 = info.tgtName.empty() ? stem : info.tgtName;
-            fr.txtPath = uniqTxtPath(outDir, stemL3 + stamp, stem);
-            if (!writeL3Txt(fr.txtPath, nr, na, dbsm, req.l3Layout, info, &localErr)) {
-                fr.note = (fr.note.empty() ? "" : fr.note + "; ") + localErr;
+            const std::string l3File = tgtName + stamp + ".txt";
+            fr.txtPath = pathJoin(outDir, l3File);
+
+            int bx = 0, by = 0, bw = 0, bh = 0;
+            const bool boxed = clampRoi(targetRoi, nr, na, bx, by, bw, bh);
+            const int outNr = boxed ? bh : nr;
+            const int outNa = boxed ? bw : na;
+            std::vector<float> grid(static_cast<std::size_t>(outNr) * outNa);
+            if (!boxed) {
+                grid = dbsm;
+                appendNote(fr.note, "未框选目标，三级与二级写全图");
+            } else {
+                for (int r = 0; r < outNr; ++r) {
+                    for (int c = 0; c < outNa; ++c)
+                        grid[static_cast<std::size_t>(r) * outNa + c] =
+                            dbsm[static_cast<std::size_t>(by + r) * na + (bx + c)];
+                }
+                fr.positionPath = pathJoin(outDir, tgtName + stamp + "_目标位置.txt");
+                if (!writePositionFile(fr.positionPath, name, nr, na, bx, by, bw, bh, l3File))
+                    appendNote(fr.note, "目标位置文件未写出");
+            }
+
+            std::string distPath = trimStr(req.mergeTxtPath);
+#if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
+            if (distPath.empty()) {
+                if (!boxed) {
+                    if (err)
+                        *err = "未框选目标，无法生成距离文件，三级数据不完整";
+                    return false;
+                }
+                const std::string cplx = siblingCplx(fPath);
+                if (cplx.empty()) {
+                    if (err)
+                        *err = "未找到同名 .cplx，无法生成距离文件: " + fPath;
+                    return false;
+                }
+                SliceTxtRequest sreq;
+                sreq.imagePath = cplx;
+                sreq.roiX = bx + (bw - 1) / 2;
+                sreq.roiY = by + (bh - 1) / 2;
+                sreq.roiW = bw;
+                sreq.roiH = bh;
+                sreq.outPath = pathJoin(outDir, stem + "_横向纵向.txt");
+                sreq.targetName = tgtName;
+                SliceTxtResponse sresp;
+                std::string serr;
+                Callbacks sliceCb = cb;
+                sliceCb.onProgress = std::function<void(int, const std::string &)>();
+                if (!exportSliceTxt(sreq, sresp, sliceCb, &serr)) {
+                    if (cancelled(cb) || serr == "已取消") {
+                        if (err)
+                            *err = "已取消";
+                        return false;
+                    }
+                    if (err)
+                        *err = serr.empty() ? "距离文件生成失败，三级数据不完整" : serr;
+                    return false;
+                }
+                distPath = sresp.txtPath.empty() ? sreq.outPath : sresp.txtPath;
+            }
+#else
+            if (distPath.empty()) {
+                if (err)
+                    *err = "当前库不能调用 SarTxtExporter，无法生成距离文件";
+                return false;
+            }
+#endif
+            std::vector<double> xy;
+            const std::vector<double> *xyPtr = 0;
+            std::string oneNote;
+            if (!loadMergeDistances(distPath, outNr * outNa, xy, &oneNote)) {
+                if (err)
+                    *err = oneNote.empty() ? "距离文件无法并入三级数据: " + distPath : oneNote;
+                return false;
+            }
+            xyPtr = &xy;
+            appendNote(fr.note, "距离文件: " + distPath);
+
+            struct tm tmbuf;
+            const time_t now = time(0);
+#if defined(_WIN32)
+            localtime_s(&tmbuf, &now);
+#else
+            localtime_r(&now, &tmbuf);
+#endif
+            char dateBuf[32], timeBuf[40];
+            std::snprintf(dateBuf, sizeof(dateBuf), "%04d-%02d-%02d", tmbuf.tm_year + 1900,
+                          tmbuf.tm_mon + 1, tmbuf.tm_mday);
+            std::snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                          tmbuf.tm_year + 1900, tmbuf.tm_mon + 1, tmbuf.tm_mday, tmbuf.tm_hour,
+                          tmbuf.tm_min, tmbuf.tm_sec);
+            if (!writeDsar(fr.txtPath, outNr, outNa, grid, xyPtr, tgtName, polName, dateBuf, timeBuf,
+                           req.fsHz, boxed, RbinUse, &localErr)) {
+                appendNote(fr.note, localErr);
                 fr.txtPath.clear();
+            }
+
+            std::string headerPath = trimStr(req.l0HeaderPath);
+            if (headerPath.empty())
+                headerPath = findL0HeaderFile(req.rawFolder, polTokenOf(name, req.pol));
+            if (headerPath.empty()) {
+                appendNote(fr.note, "未找到匹配极化的 0 级 DAT，未写二级数据");
+            } else {
+                L0Heads heads;
+                if (haveFixed) {
+                    heads = fixedHeads;
+                } else {
+                    std::map<std::string, L0Heads>::const_iterator it = l0Cache.find(headerPath);
+                    if (it == l0Cache.end()) {
+                        L0Heads loaded;
+                        if (!loadL0Heads(headerPath, loaded.fileHdr, loaded.frame0, &localErr)) {
+                            appendNote(fr.note, localErr);
+                            headerPath.clear();
+                        } else {
+                            l0Cache[headerPath] = loaded;
+                            heads = loaded;
+                        }
+                    } else {
+                        heads = it->second;
+                    }
+                }
+                if (!headerPath.empty()) {
+                    fr.pdatPath = fr.txtPath.empty() ? pathJoin(outDir, tgtName + stamp + ".pdat")
+                                                     : pdatPathForTxt(fr.txtPath);
+                    if (!Level2Pdat::saveCalDbsm(fr.pdatPath, heads.fileHdr, heads.frame0, outNr, outNa,
+                                                 grid, R_cal, req.sigmaTheoryDb, 100, &localErr)) {
+                        appendNote(fr.note, localErr);
+                        fr.pdatPath.clear();
+                    }
+                }
             }
         }
         resp.files.push_back(fr);

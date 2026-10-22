@@ -1,16 +1,19 @@
 #include "MainWindow.h"
 #include "CalMosaicWorker.h"
+#include "ManualAlignDialog.h"
 #include "RectPickDialog.h"
 
 #include "rcs/rcs.hpp"
 
+#include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QImage>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -21,11 +24,40 @@
 #include <QTabWidget>
 #include <QThread>
 #include <QVBoxLayout>
+#include <cstring>
+
+namespace {
+
+QString qs(const std::string &s)
+{
+    return QString::fromUtf8(s.c_str());
+}
+
+std::string ss(const QString &s)
+{
+    return std::string(s.toUtf8().constData());
+}
+
+QImage grayToQImage(const GrayImage &g)
+{
+    if (g.width <= 0 || g.height <= 0 || g.pixels.empty())
+        return QImage();
+    QImage img(g.width, g.height, QImage::Format_Grayscale8);
+    for (int y = 0; y < g.height; ++y) {
+        std::memcpy(img.scanLine(y), &g.pixels[static_cast<size_t>(y) * g.width],
+                    static_cast<size_t>(g.width));
+    }
+    return img;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , calibEdit_(0)
     , rawDirEdit_(0)
+    , l0Edit_(0)
+    , mergeEdit_(0)
     , calOutEdit_(0)
     , bandCombo_(0)
     , polCombo_(0)
@@ -33,17 +65,23 @@ MainWindow::MainWindow(QWidget *parent)
     , calStartBtn_(0)
     , mosaicInEdit_(0)
     , mosaicOutEdit_(0)
+    , mosaicModeCombo_(0)
+    , mosaicRawNrSpin_(0)
+    , mosaicRawNaSpin_(0)
     , medSpin_(0)
+    , flattenTifEdit_(0)
+    , mosaicListBtn_(0)
     , mosaicStartBtn_(0)
+    , flattenBtn_(0)
     , ziSrcEdit_(0)
     , ziOutEdit_(0)
-    , ziEngineEdit_(0)
-    , ziMcrEdit_(0)
+    , ziKindCombo_(0)
     , ziBeginSpin_(0)
     , ziDeltaSpin_(0)
     , ziLastSpin_(0)
     , ziNumSpin_(0)
-    , ziTimeoutSpin_(0)
+    , ziOffsetSpin_(0)
+    , ziRangeSpin_(0)
     , ziStartBtn_(0)
     , cancelBtn_(0)
     , progress_(0)
@@ -68,6 +106,10 @@ MainWindow::MainWindow(QWidget *parent)
     auto *calForm = new QFormLayout;
     calibEdit_ = new QLineEdit;
     rawDirEdit_ = new QLineEdit;
+    l0Edit_ = new QLineEdit;
+    l0Edit_->setPlaceholderText(QStringLiteral("可选，留空则按极化自动找 *_L0_HH.dat"));
+    mergeEdit_ = new QLineEdit;
+    mergeEdit_->setPlaceholderText(QStringLiteral("留空则按目标框从同名 .cplx 生成并写入三级"));
     calOutEdit_ = new QLineEdit;
     bandCombo_ = new QComboBox;
     bandCombo_->addItems(QStringList() << QStringLiteral("X") << QStringLiteral("Ku")
@@ -100,6 +142,15 @@ MainWindow::MainWindow(QWidget *parent)
         hl->addWidget(b);
         connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseRawDir);
     }
+    auto *l0Row = new QWidget;
+    {
+        auto *hl = new QHBoxLayout(l0Row);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(l0Edit_, 1);
+        auto *b = new QPushButton(QStringLiteral("浏览…"));
+        hl->addWidget(b);
+        connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseL0);
+    }
     auto *outRow = new QWidget;
     {
         auto *hl = new QHBoxLayout(outRow);
@@ -112,12 +163,23 @@ MainWindow::MainWindow(QWidget *parent)
 
     calForm->addRow(QStringLiteral("定标 RAW（含角反）"), calibRow);
     calForm->addRow(QStringLiteral("批量 RAW 目录"), rawRow);
+    calForm->addRow(QStringLiteral("0 级头文件（可空）"), l0Row);
+    auto *mergeRow = new QWidget;
+    {
+        auto *hl = new QHBoxLayout(mergeRow);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(mergeEdit_, 1);
+        auto *b = new QPushButton(QStringLiteral("浏览…"));
+        hl->addWidget(b);
+        connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseMerge);
+    }
+    calForm->addRow(QStringLiteral("距离文件（留空则自动生成）"), mergeRow);
     calForm->addRow(QStringLiteral("输出目录（可空）"), outRow);
     calForm->addRow(QStringLiteral("波段 band"), bandCombo_);
     calForm->addRow(QStringLiteral("极化 pol"), polCombo_);
     calForm->addRow(QStringLiteral("角反理论 RCS"), sigmaSpin_);
     calLay->addLayout(calForm);
-    calStartBtn_ = new QPushButton(QStringLiteral("开始定标（将弹出框选角反缓冲区）"));
+    calStartBtn_ = new QPushButton(QStringLiteral("开始定标（先框角反，再框目标）"));
     calLay->addWidget(calStartBtn_);
     calLay->addStretch(1);
     connect(calStartBtn_, &QPushButton::clicked, this, &MainWindow::onStartCal);
@@ -129,6 +191,17 @@ MainWindow::MainWindow(QWidget *parent)
     auto *mosForm = new QFormLayout;
     mosaicInEdit_ = new QLineEdit;
     mosaicOutEdit_ = new QLineEdit;
+    mosaicModeCombo_ = new QComboBox;
+    mosaicModeCombo_->addItem(QStringLiteral("自动拼接"), 0);
+    mosaicModeCombo_->addItem(QStringLiteral("手动拼接"), 1);
+    mosaicRawNrSpin_ = new QSpinBox;
+    mosaicRawNaSpin_ = new QSpinBox;
+    mosaicRawNrSpin_->setRange(0, 1000000);
+    mosaicRawNaSpin_->setRange(0, 1000000);
+    mosaicRawNrSpin_->setSpecialValueText(QStringLiteral("自动"));
+    mosaicRawNaSpin_->setSpecialValueText(QStringLiteral("自动"));
+    flattenTifEdit_ = new QLineEdit;
+    flattenTifEdit_->setPlaceholderText(QStringLiteral("已有拼接 TIFF，单独匀光"));
     medSpin_ = new QDoubleSpinBox;
     medSpin_->setRange(0.05, 1.0);
     medSpin_->setDecimals(2);
@@ -153,16 +226,33 @@ MainWindow::MainWindow(QWidget *parent)
         hl->addWidget(b);
         connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseMosaicOut);
     }
-    mosForm->addRow(QStringLiteral("输入目录（≥2 张 TIFF）"), minRow);
+    auto *flatRow = new QWidget;
+    {
+        auto *hl = new QHBoxLayout(flatRow);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(flattenTifEdit_, 1);
+        auto *b = new QPushButton(QStringLiteral("浏览…"));
+        hl->addWidget(b);
+        connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseFlattenTif);
+    }
+    mosForm->addRow(QStringLiteral("输入目录（≥2 张）"), minRow);
     mosForm->addRow(QStringLiteral("输出目录"), moutRow);
+    mosForm->addRow(QStringLiteral("拼接方式"), mosaicModeCombo_);
+    mosForm->addRow(QStringLiteral("RAW 行数"), mosaicRawNrSpin_);
+    mosForm->addRow(QStringLiteral("RAW 列数"), mosaicRawNaSpin_);
     mosForm->addRow(QStringLiteral("匀光 medOut"), medSpin_);
+    mosForm->addRow(QStringLiteral("单独匀光 TIFF"), flatRow);
     mosLay->addLayout(mosForm);
-    mosaicStartBtn_ = new QPushButton(QStringLiteral("开始自动拼接"));
+    mosaicListBtn_ = new QPushButton(QStringLiteral("列出 TIFF（listMosaicTiffs）"));
+    mosaicStartBtn_ = new QPushButton(QStringLiteral("开始拼接（processMosaic）"));
+    flattenBtn_ = new QPushButton(QStringLiteral("单独匀光（flattenMosaic）"));
+    mosLay->addWidget(mosaicListBtn_);
     mosLay->addWidget(mosaicStartBtn_);
-    mosLay->addWidget(new QLabel(
-        QStringLiteral("推荐输入定标产物 *_RCS_dBsm.tif")));
+    mosLay->addWidget(flattenBtn_);
     mosLay->addStretch(1);
+    connect(mosaicListBtn_, &QPushButton::clicked, this, &MainWindow::onListMosaicTiffs);
     connect(mosaicStartBtn_, &QPushButton::clicked, this, &MainWindow::onStartMosaic);
+    connect(flattenBtn_, &QPushButton::clicked, this, &MainWindow::onStartFlatten);
     tabs->addTab(mosPage, QStringLiteral("大图拼接"));
 
     // ---- 零级成像 ----
@@ -173,24 +263,27 @@ MainWindow::MainWindow(QWidget *parent)
     ziOutEdit_ = new QLineEdit;
     ziSrcEdit_->setPlaceholderText(QStringLiteral("含原始 DAT 的目录"));
     ziOutEdit_->setPlaceholderText(QStringLiteral("L0 与图像输出目录"));
-    ziEngineEdit_ = new QLineEdit;
-    ziEngineEdit_->setPlaceholderText(QStringLiteral("留空则使用 SDK/engine/for_testing"));
-    ziMcrEdit_ = new QLineEdit(QStringLiteral("/usr/local/MATLAB/MATLAB_Runtime/v93"));
+    ziKindCombo_ = new QComboBox;
+    ziKindCombo_->addItem(QStringLiteral("SAR 成像"), 0);
+    ziKindCombo_->addItem(QStringLiteral("ISAR 成像"), 1);
     ziBeginSpin_ = new QSpinBox;
     ziDeltaSpin_ = new QSpinBox;
     ziLastSpin_ = new QSpinBox;
     ziNumSpin_ = new QSpinBox;
-    ziTimeoutSpin_ = new QSpinBox;
+    ziOffsetSpin_ = new QSpinBox;
+    ziRangeSpin_ = new QSpinBox;
     ziBeginSpin_->setRange(0, 1000000);
     ziDeltaSpin_->setRange(0, 1000000);
     ziLastSpin_->setRange(0, 1000000);
     ziNumSpin_->setRange(2, 1000000);
-    ziTimeoutSpin_->setRange(0, 86400);
-    ziTimeoutSpin_->setSpecialValueText(QStringLiteral("不限制"));
-    ziBeginSpin_->setValue(1);
-    ziDeltaSpin_->setValue(20);
-    ziLastSpin_->setValue(20);
-    ziNumSpin_->setValue(20);
+    ziOffsetSpin_->setRange(-1000000, 1000000);
+    ziRangeSpin_->setRange(1, 10000000);
+    ziBeginSpin_->setValue(3);
+    ziDeltaSpin_->setValue(120);
+    ziLastSpin_->setValue(6000);
+    ziNumSpin_->setValue(50);
+    ziOffsetSpin_->setValue(100);
+    ziRangeSpin_->setValue(8192);
     auto *ziSrcRow = new QWidget;
     {
         auto *hl = new QHBoxLayout(ziSrcRow);
@@ -209,33 +302,21 @@ MainWindow::MainWindow(QWidget *parent)
         hl->addWidget(b);
         connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseZeroOut);
     }
-    auto *ziEngRow = new QWidget;
-    {
-        auto *hl = new QHBoxLayout(ziEngRow);
-        hl->setContentsMargins(0, 0, 0, 0);
-        hl->addWidget(ziEngineEdit_, 1);
-        auto *b = new QPushButton(QStringLiteral("浏览…"));
-        hl->addWidget(b);
-        connect(b, &QPushButton::clicked, this, &MainWindow::onBrowseZeroEngine);
-    }
     ziForm->addRow(QStringLiteral("源 DAT 目录"), ziSrcRow);
     ziForm->addRow(QStringLiteral("L0 目录"), ziOutRow);
+    ziForm->addRow(QStringLiteral("成像类型"), ziKindCombo_);
     ziForm->addRow(QStringLiteral("起始编号"), ziBeginSpin_);
     ziForm->addRow(QStringLiteral("间隔数目"), ziDeltaSpin_);
     ziForm->addRow(QStringLiteral("最后编号"), ziLastSpin_);
     ziForm->addRow(QStringLiteral("文件个数"), ziNumSpin_);
-    ziForm->addRow(QStringLiteral("引擎目录"), ziEngRow);
-    ziForm->addRow(QStringLiteral("MCR 目录"), ziMcrEdit_);
-    ziForm->addRow(QStringLiteral("超时（秒）"), ziTimeoutSpin_);
+    ziForm->addRow(QStringLiteral("距离偏移"), ziOffsetSpin_);
+    ziForm->addRow(QStringLiteral("距离向点数"), ziRangeSpin_);
     ziLay->addLayout(ziForm);
     ziStartBtn_ = new QPushButton(QStringLiteral("转换并成像"));
     ziLay->addWidget(ziStartBtn_);
-    ziLay->addWidget(new QLabel(QStringLiteral(
-        "一次调用 processZeroImageFolder：把目录内这一层的源 DAT 全部转为 HH/VV/HV/VH 与 .sarrec，再对 L0 目录成像。\n"
-        "图像写回 L0 目录。已是 _HH/_VV/_HV/_VH 的文件会跳过。\n"
-        "需 MATLAB Runtime v9.3。\n"
-        "引擎见 SDK/engine/for_testing。文件个数至少为 2。")));
     ziLay->addStretch(1);
+    connect(ziKindCombo_, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onZeroKindChanged);
     connect(ziStartBtn_, &QPushButton::clicked, this, &MainWindow::onStartZeroImage);
     tabs->addTab(ziPage, QStringLiteral("零级成像"));
 
@@ -284,7 +365,9 @@ void MainWindow::setBusy(bool busy)
 {
     busy_ = busy;
     calStartBtn_->setEnabled(!busy);
+    mosaicListBtn_->setEnabled(!busy);
     mosaicStartBtn_->setEnabled(!busy);
+    flattenBtn_->setEnabled(!busy);
     ziStartBtn_->setEnabled(!busy);
     cancelBtn_->setEnabled(busy);
 }
@@ -316,6 +399,15 @@ void MainWindow::onBrowseRawDir()
         QFileDialog::getExistingDirectory(this, QStringLiteral("选择批量 RAW 目录"), rawDirEdit_->text());
     if (!d.isEmpty())
         rawDirEdit_->setText(d);
+}
+
+void MainWindow::onBrowseL0()
+{
+    const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择 0 级头文件"),
+                                                   l0Edit_->text(),
+                                                   QStringLiteral("DAT (*.dat);;所有文件 (*)"));
+    if (!f.isEmpty())
+        l0Edit_->setText(f);
 }
 
 void MainWindow::onBrowseCalOut()
@@ -355,10 +447,106 @@ void MainWindow::onStartCal()
     const QString pol =
         (polCombo_->currentIndex() == polCombo_->count() - 1) ? QString() : polCombo_->currentText();
     QMetaObject::invokeMethod(
-        worker_, "startCal", Qt::QueuedConnection, Q_ARG(QString, calibEdit_->text().trimmed()),
+        worker_, "startCal", Qt::QueuedConnection,         Q_ARG(QString, calibEdit_->text().trimmed()),
         Q_ARG(QString, rawDirEdit_->text().trimmed()), Q_ARG(QString, calOutEdit_->text().trimmed()),
         Q_ARG(QString, bandCombo_->currentText()), Q_ARG(QString, pol),
-        Q_ARG(double, sigmaSpin_->value()));
+        Q_ARG(double, sigmaSpin_->value()), Q_ARG(QString, l0Edit_->text().trimmed()),
+        Q_ARG(QString, mergeEdit_->text().trimmed()));
+}
+
+void MainWindow::onBrowseFlattenTif()
+{
+    const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择要匀光的 TIFF"),
+                                                   flattenTifEdit_->text(),
+                                                   QStringLiteral("TIFF (*.tif *.tiff);;所有文件 (*)"));
+    if (!f.isEmpty())
+        flattenTifEdit_->setText(f);
+}
+
+void MainWindow::onListMosaicTiffs()
+{
+    if (mosaicInEdit_->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("拼接"), QStringLiteral("请先选择输入目录"));
+        return;
+    }
+    const std::vector<std::string> paths = listMosaicTiffs(ss(mosaicInEdit_->text().trimmed()));
+    appendLog(QStringLiteral("---- listMosaicTiffs：%1 张 ----").arg(static_cast<int>(paths.size())));
+    if (paths.empty())
+        appendLog(QStringLiteral("目录里没有 TIFF。若只有 RAW，开始拼接时会先转换。"));
+    for (size_t i = 0; i < paths.size(); ++i)
+        appendLog(QStringLiteral("  %1").arg(qs(paths[i])));
+}
+
+bool MainWindow::collectManualOffsets(QVector<int> &offR, QVector<int> &offC)
+{
+    appendLog(QStringLiteral("调用 prepareMosaicInputs…"));
+    QApplication::processEvents();
+    std::vector<std::string> pathStd;
+    Callbacks pcb;
+    pcb.onMessage = [this](const std::string &s) { appendLog(qs(s)); };
+    pcb.onProgress = [this](int p, const std::string &s) {
+        setProgress(p, qs(s));
+        appendLog(qs(s));
+    };
+    pcb.isCancelled = []() { return false; };
+    std::string errStd;
+    if (!prepareMosaicInputs(ss(mosaicInEdit_->text().trimmed()), ss(mosaicOutEdit_->text().trimmed()),
+                             pathStd, pcb, &errStd, mosaicRawNrSpin_->value(),
+                             mosaicRawNaSpin_->value())) {
+        QMessageBox::warning(this, QStringLiteral("手动拼接"), qs(errStd));
+        return false;
+    }
+    if (pathStd.size() < 2) {
+        QMessageBox::warning(this, QStringLiteral("手动拼接"), QStringLiteral("至少需要 2 张图像"));
+        return false;
+    }
+
+    const int step = 8;
+    const int n = static_cast<int>(pathStd.size());
+    QVector<QImage> previews(n);
+    appendLog(QStringLiteral("调用 loadMosaicGrayPreview（抽稀×%1）…").arg(step));
+    for (int i = 0; i < n; ++i) {
+        int fw = 0, fh = 0;
+        GrayImage gp;
+        if (!loadMosaicGrayPreview(pathStd[static_cast<size_t>(i)], step, gp, fw, fh, &errStd)) {
+            QMessageBox::warning(this, QStringLiteral("手动拼接"), qs(errStd));
+            return false;
+        }
+        previews[i] = grayToQImage(gp);
+        appendLog(QStringLiteral("  [%1] %2 (%3×%4)")
+                      .arg(i + 1)
+                      .arg(QFileInfo(qs(pathStd[static_cast<size_t>(i)])).fileName())
+                      .arg(fw)
+                      .arg(fh));
+        QApplication::processEvents();
+    }
+
+    offR = QVector<int>(n, 0);
+    offC = QVector<int>(n, 0);
+    for (int i = 1; i < n; ++i) {
+        ManualAlignDialog dlg(previews[i - 1], previews[i], step, i, n - 1, this);
+        if (dlg.exec() != QDialog::Accepted) {
+            appendLog(QStringLiteral("用户取消手动对齐"));
+            return false;
+        }
+        offR[i] = offR[i - 1] + dlg.dRowFull();
+        offC[i] = offC[i - 1] + dlg.dColFull();
+        appendLog(QStringLiteral("第%1→%2张: Δ行=%3 Δ列=%4")
+                      .arg(i)
+                      .arg(i + 1)
+                      .arg(dlg.dRowFull())
+                      .arg(dlg.dColFull()));
+        if (dlg.skipRestAuto()) {
+            const int nom = qMax(1, previews[i].width() / 3) * step;
+            for (int j = i + 1; j < n; ++j) {
+                offR[j] = offR[j - 1];
+                offC[j] = offC[j - 1] + nom;
+            }
+            appendLog(QStringLiteral("剩余对按名义步进自动摆位"));
+            break;
+        }
+    }
+    return true;
 }
 
 void MainWindow::onStartMosaic()
@@ -367,13 +555,39 @@ void MainWindow::onStartMosaic()
         QMessageBox::warning(this, QStringLiteral("拼接"), QStringLiteral("请先选择输入目录"));
         return;
     }
+    const int mode = mosaicModeCombo_->currentData().toInt();
+    QVector<int> offR, offC;
+    if (mode == 1) {
+        progress_->setValue(0);
+        appendLog(QStringLiteral("---- 手动拼接 ----"));
+        if (!collectManualOffsets(offR, offC))
+            return;
+        worker_->setMosaicOffsets(offR, offC);
+    }
     setBusy(true);
     progress_->setValue(0);
-    appendLog(QStringLiteral("---- 拼接开始 ----"));
+    appendLog(mode == 1 ? QStringLiteral("手动摆位完成，开始融合写出…")
+                        : QStringLiteral("---- 自动拼接 ----"));
     QMetaObject::invokeMethod(worker_, "startMosaic", Qt::QueuedConnection,
                               Q_ARG(QString, mosaicInEdit_->text().trimmed()),
                               Q_ARG(QString, mosaicOutEdit_->text().trimmed()),
-                              Q_ARG(double, medSpin_->value()));
+                              Q_ARG(double, medSpin_->value()), Q_ARG(int, mode),
+                              Q_ARG(int, mosaicRawNrSpin_->value()),
+                              Q_ARG(int, mosaicRawNaSpin_->value()));
+}
+
+void MainWindow::onStartFlatten()
+{
+    if (flattenTifEdit_->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("匀光"), QStringLiteral("请先选择 TIFF"));
+        return;
+    }
+    setBusy(true);
+    progress_->setValue(0);
+    appendLog(QStringLiteral("---- 单独匀光 ----"));
+    QMetaObject::invokeMethod(worker_, "startFlatten", Qt::QueuedConnection,
+                              Q_ARG(QString, flattenTifEdit_->text().trimmed()),
+                              Q_ARG(QString, QString()), Q_ARG(double, medSpin_->value()));
 }
 
 void MainWindow::onBrowseZeroSrc()
@@ -392,12 +606,15 @@ void MainWindow::onBrowseZeroOut()
         ziOutEdit_->setText(d);
 }
 
-void MainWindow::onBrowseZeroEngine()
+void MainWindow::onZeroKindChanged(int index)
 {
-    const QString d =
-        QFileDialog::getExistingDirectory(this, QStringLiteral("选择引擎目录"), ziEngineEdit_->text());
-    if (!d.isEmpty())
-        ziEngineEdit_->setText(d);
+    const bool isar = index == 1;
+    ziBeginSpin_->setValue(isar ? 12 : 3);
+    ziDeltaSpin_->setValue(isar ? 100 : 120);
+    ziLastSpin_->setValue(6000);
+    ziNumSpin_->setValue(isar ? 8 : 50);
+    ziOffsetSpin_->setValue(isar ? 1140 : 100);
+    ziRangeSpin_->setValue(isar ? 512 : 8192);
 }
 
 void MainWindow::onStartZeroImage()
@@ -414,8 +631,8 @@ void MainWindow::onStartZeroImage()
         worker_, "startZeroImage", Qt::QueuedConnection, Q_ARG(QString, ziSrcEdit_->text().trimmed()),
         Q_ARG(QString, ziOutEdit_->text().trimmed()), Q_ARG(int, ziBeginSpin_->value()),
         Q_ARG(int, ziDeltaSpin_->value()), Q_ARG(int, ziLastSpin_->value()),
-        Q_ARG(int, ziNumSpin_->value()), Q_ARG(QString, ziEngineEdit_->text().trimmed()),
-        Q_ARG(QString, ziMcrEdit_->text().trimmed()), Q_ARG(int, ziTimeoutSpin_->value()));
+        Q_ARG(int, ziNumSpin_->value()), Q_ARG(int, ziOffsetSpin_->value()),
+        Q_ARG(int, ziRangeSpin_->value()), Q_ARG(int, ziKindCombo_->currentData().toInt()));
 }
 
 void MainWindow::onCancel()
@@ -436,9 +653,21 @@ void MainWindow::onFinished(bool ok, const QString &msg)
                                                                               : msg);
 }
 
-void MainWindow::onNeedRectRoi(const QImage &preview, int fullNr, int fullNa)
+void MainWindow::onBrowseMerge()
 {
-    RectPickDialog dlg(preview, fullNr, fullNa, QStringLiteral("框选角反缓冲区"), this);
+    const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择距离 txt"),
+                                                   mergeEdit_->text(),
+                                                   QStringLiteral("文本 (*.txt);;所有文件 (*)"));
+    if (!f.isEmpty())
+        mergeEdit_->setText(f);
+}
+
+void MainWindow::onNeedRectRoi(const QImage &preview, int fullNr, int fullNa, const QString &stage)
+{
+    const QString title = (stage == QStringLiteral("target"))
+                              ? QStringLiteral("框选目标（交给成像方的范围）")
+                              : QStringLiteral("框选角反缓冲区");
+    RectPickDialog dlg(preview, fullNr, fullNa, title, this);
     const bool ok = (dlg.exec() == QDialog::Accepted) && dlg.acceptedOk();
     const RectRoi r = dlg.roi();
     worker_->provideRectRoi(ok, QRect(r.x, r.y, r.w, r.h));

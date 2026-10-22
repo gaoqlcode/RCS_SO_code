@@ -60,18 +60,16 @@ fi
 cp -a "${rcs_sos[@]}" "$OUT/lib/"
 shopt -u nullglob
 
-# 零级成像引擎（MATLAB 独立程序）。库会查找 lib 旁的 ../engine/for_testing
-ENG="$ROOT/3rdparty/zerodataimagehandle/engine/for_testing"
-if [[ -d "$ENG" ]]; then
-  mkdir -p "$OUT/engine"
-  cp -a "$ENG" "$OUT/engine/"
+if [[ -f "$BUILD_DIR/lib/libToZeroDataCpp11.so" ]]; then
+  cp -a "$BUILD_DIR/lib/libToZeroDataCpp11.so" "$OUT/lib/"
 fi
 
-# MATLAB Runtime v9.3 离线安装器，供客户在目标机安装
-MCR_RT="$ROOT/SAR-SDK/runtime"
-if [[ -f "$MCR_RT/MyAppInstaller_mcr.install" ]]; then
-  mkdir -p "$OUT/runtime"
-  cp -a "$MCR_RT/." "$OUT/runtime/"
+# 零级成像后处理。库查找 lib 旁的 ../engine/bin/sarIsarPostProcess
+ENG="$ROOT/3rdparty/sar_isar_post"
+if [[ -x "$ENG/bin/sarIsarPostProcess" ]]; then
+  rm -rf "$OUT/engine"
+  mkdir -p "$OUT/engine"
+  cp -a "$ENG/bin" "$ENG/lib" "$OUT/engine/"
 fi
 
 # ---- 收集 ldd 依赖（跳过系统 libc / 显卡驱动等）----
@@ -186,15 +184,13 @@ cat > "$OUT/README.txt" <<EOF
 结构:
   bin/RCS          GUI
   bin/rcs_cli      命令行
-  lib/             librcs_proc + Qt 等运行时库
-  engine/          零级成像后处理程序
-  runtime/         MATLAB Runtime v9.3 离线安装器（bash runtime/install_mcr.sh）
+  lib/             librcs_proc、libToZeroDataCpp11.so 与 Qt 等运行时库（两个 so 必须同目录）
+  engine/          bin/sarIsarPostProcess 与自带运行库，不需要 MATLAB
   plugins/         Qt 平台插件
   run_RCS.sh       推荐用此启动 GUI
   run_cli.sh       启动 CLI
 
 用法:
-  bash runtime/install_mcr.sh    # 目标机首次使用零级成像前执行
   ./run_RCS.sh
   ./run_cli.sh --help
 

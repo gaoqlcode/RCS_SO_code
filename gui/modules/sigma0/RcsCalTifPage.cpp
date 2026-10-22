@@ -25,6 +25,8 @@ RcsCalTifPage::RcsCalTifPage(QWidget *parent)
     : QWidget(parent)
     , calibEdit_(0)
     , folderEdit_(0)
+    , l0Edit_(0)
+    , mergeEdit_(0)
     , outDir_(0)
     , nameEdit_(0)
     , bandCombo_(0)
@@ -72,6 +74,28 @@ RcsCalTifPage::RcsCalTifPage(QWidget *parent)
     folderRow->addWidget(folderEdit_, 1);
     folderRow->addWidget(folderBrowse);
     pathLay->addLayout(folderRow);
+
+    l0Edit_ = new QLineEdit(pathBox);
+    l0Edit_->setMinimumHeight(28);
+    l0Edit_->setPlaceholderText(QStringLiteral("可选。留空则在 RAW 目录按极化自动找 *_L0_HH.dat"));
+    auto *l0Browse = new QPushButton(QStringLiteral("浏览…"), pathBox);
+    l0Browse->setFixedWidth(72);
+    auto *l0Row = new QHBoxLayout;
+    l0Row->addWidget(new QLabel(QStringLiteral("0 级头文件"), pathBox));
+    l0Row->addWidget(l0Edit_, 1);
+    l0Row->addWidget(l0Browse);
+    pathLay->addLayout(l0Row);
+
+    mergeEdit_ = new QLineEdit(pathBox);
+    mergeEdit_->setMinimumHeight(28);
+    mergeEdit_->setPlaceholderText(QStringLiteral("必填"));
+    auto *mergeBrowse = new QPushButton(QStringLiteral("浏览…"), pathBox);
+    mergeBrowse->setFixedWidth(72);
+    auto *mergeRow = new QHBoxLayout;
+    mergeRow->addWidget(new QLabel(QStringLiteral("距离文件"), pathBox));
+    mergeRow->addWidget(mergeEdit_, 1);
+    mergeRow->addWidget(mergeBrowse);
+    pathLay->addLayout(mergeRow);
 
     outDir_ = new OutDirField(this);
     pathLay->addLayout(outDir_->createRow(pathBox));
@@ -203,6 +227,8 @@ RcsCalTifPage::RcsCalTifPage(QWidget *parent)
 
     connect(calibBrowse, &QPushButton::clicked, this, &RcsCalTifPage::onBrowseCalib);
     connect(folderBrowse, &QPushButton::clicked, this, &RcsCalTifPage::onBrowseFolder);
+    connect(l0Browse, &QPushButton::clicked, this, &RcsCalTifPage::onBrowseL0);
+    connect(mergeBrowse, &QPushButton::clicked, this, &RcsCalTifPage::onBrowseMerge);
     connect(startBtn_, &QPushButton::clicked, this, &RcsCalTifPage::onStart);
     connect(cancelBtn_, &QPushButton::clicked, this, &RcsCalTifPage::onCancel);
 
@@ -253,6 +279,24 @@ void RcsCalTifPage::onBrowseFolder()
     emit folderEdit_->editingFinished();
 }
 
+void RcsCalTifPage::onBrowseL0()
+{
+    const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择 0 级头文件"),
+                                                   l0Edit_->text(),
+                                                   QStringLiteral("DAT (*.dat);;所有文件 (*)"));
+    if (!f.isEmpty())
+        l0Edit_->setText(f);
+}
+
+void RcsCalTifPage::onBrowseMerge()
+{
+    const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("选择距离 txt"),
+                                                   mergeEdit_->text(),
+                                                   QStringLiteral("文本 (*.txt);;所有文件 (*)"));
+    if (!f.isEmpty())
+        mergeEdit_->setText(f);
+}
+
 void RcsCalTifPage::onStart()
 {
     if (calibEdit_->text().trimmed().isEmpty()) {
@@ -273,6 +317,8 @@ void RcsCalTifPage::onStart()
     p.calibRaw = calibEdit_->text().trimmed();
     p.rawFolder = folderEdit_->text().trimmed();
     p.outDir = outDir_->text();
+    p.l0HeaderPath = l0Edit_->text().trimmed();
+    p.mergeTxtPath = mergeEdit_->text().trimmed();
     p.tgtName = nameEdit_->text().trimmed().isEmpty() ? QStringLiteral("目标")
                                                       : nameEdit_->text().trimmed();
     p.band = bandCombo_->currentText();
@@ -300,8 +346,10 @@ void RcsCalTifPage::onCancel()
 void RcsCalTifPage::onNeedRectRoi(const QImage &preview, int fullNr, int fullNa,
                                   const QString &stage)
 {
-    Q_UNUSED(stage);
-    RectPickDialog dlg(preview, fullNr, fullNa, QStringLiteral("框选角反缓冲区（必选）"), this);
+    const QString title = (stage == QStringLiteral("target"))
+                              ? QStringLiteral("框选目标（交给成像方的范围）")
+                              : QStringLiteral("框选角反缓冲区（必选）");
+    RectPickDialog dlg(preview, fullNr, fullNa, title, this);
     UserSelection sel;
     if (dlg.exec() == QDialog::Accepted && dlg.acceptedOk()) {
         const RectRoi r = dlg.roi();

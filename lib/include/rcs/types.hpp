@@ -310,18 +310,20 @@ struct Sigma0Response {
     Sigma0Response() : K(0), pNoise(0) {}
 };
 
-// ===== [9] RCS 像辐射定标（角反 K → 整景 dBsm TIFF + 三级 txt）=====
+// ===== [9] RCS 像辐射定标（角反 K → 整景 dBsm TIFF + 三级 txt + 二级 pdat）=====
 // 对应 MATLAB HXSSXS_207_cal_tif.m
 
 namespace rcs {
 enum RcsCalAnchor { RcsCalLastRow = 0, RcsCalCenter = 1, RcsCalCrKnown = 2 };
-enum RcsCalL3Layout { RcsCalL3Point = 0, RcsCalL3Row = 1 };
 } // namespace rcs
 
 struct RcsCalTifRequest {
     std::string calibRawPath; ///< 含角反的定标 RAW
     std::string rawFolder;    ///< 待批量定标的 RAW 目录
     std::string outDir;       ///< 空则用 rawFolder
+    std::string l0HeaderPath; ///< 二级 .pdat 用的 0 级 DAT；空则在 rawFolder 按极化自动找
+    std::string mergeTxtPath; ///< 距离 txt。空则按目标框从同名 .cplx 生成，并写入三级前两列
+    RectRoi targetRoi;        ///< 目标框（左上角，0 起点）。有效则只写框内三级/二级
     std::string tgtName;      ///< 三级文件名前缀，如「林地」
     std::string band;         ///< 波段筛文件 + 波束宽：X/Ku/Ka/W
     std::string pol;          ///< 极化筛文件，空=不按极化筛
@@ -332,9 +334,8 @@ struct RcsCalTifRequest {
     int anchorMode; ///< rcs::RcsCal*
     double rCalKnown;
     int rowCrHint;
-    bool doCalib;   ///< true=框选角反求 K；false=用下面预填的 K/R_near/Rbin
-    int l3Layout;   ///< rcs::RcsCalL3Point / Row
-    int maxFiles;   ///< <=0 全部
+    bool doCalib; ///< true=框选角反求 K；false=用下面预填的 K/R_near/Rbin
+    int maxFiles; ///< <=0 全部
     bool autoPick;  ///< false=onRectRoi 框角反缓冲；true=用 calBufRoi
     RectRoi calBufRoi;
     // doCalib=false 时复用
@@ -342,12 +343,12 @@ struct RcsCalTifRequest {
     double R_near;
     double Rbin;
     Level3Info header; ///< 可选覆盖三级头字段（空则用默认）
-    // 库内固定（不暴露）：始终写 *_RCS_dBsm.tif + 三级 txt；DN=dBsm×100
+    // 库内固定（不暴露）：始终写 *_RCS_dBsm.tif、三级 txt、同名二级 .pdat；DN=dBsm×100
 
     RcsCalTifRequest()
         : band("X"), pol("HH"), sigmaTheoryDb(18.25), fsHz(1.25e9), incAngleDeg(70.0),
-          hFlight(500.0), anchorMode(0), rCalKnown(0), rowCrHint(0), doCalib(true), l3Layout(0),
-          maxFiles(0), autoPick(false), K(0), R_near(0), Rbin(0)
+          hFlight(500.0), anchorMode(0), rCalKnown(0), rowCrHint(0), doCalib(true), maxFiles(0),
+          autoPick(false), K(0), R_near(0), Rbin(0)
     {
         tgtName = "目标";
     }
@@ -357,6 +358,8 @@ struct RcsCalTifFileResult {
     std::string rawName;
     std::string tifPath;
     std::string txtPath;
+    std::string pdatPath;     ///< 二级 .pdat；失败可空
+    std::string positionPath; ///< 给成像方的目标位置；未框选可空
     int nr;
     int na;
     double dbsmMin;
@@ -504,36 +507,22 @@ struct ToZeroDataResponse {
     }
 };
 
-/** Para.ini 的 14 项成像参数。文件个数至少为 2。 */
+/** 传给 sarIsarPostProcess 的批次参数。文件个数至少为 2。 */
 struct ZeroImageParameters {
-    int beginId;       ///< 起始文件编号；默认 30
-    int deltaNum;      ///< 间隔文件数目；默认 120
-    int lastFileId;    ///< 最后一个文件编号；默认 6000
-    int rangeOffset;   ///< 最近成像作用距离偏移值；默认 100
-    int fileNum;       ///< 文件个数（至少 2）；默认 16
-    int testMode;      ///< 测试模式；默认 0
-    int aperLen;       ///< 误差估计点数；默认 256
-    int tarPosY;       ///< 目标所在位置（y)；默认 1711
-    int iqOrderBand1;  ///< 第一个波段的 IQ 顺序；默认 1
-    int iqOrderBand2;  ///< 第二个波段的 IQ 顺序；默认 1
-    int rangePoints;   ///< 距离向点数；默认 8192
-    int errEstStart;   ///< 误差估计开始点；默认 500
-    int errEstLength;  ///< 误差估计长度；默认 500
+    int beginId;     ///< 起始文件编号；SAR 模板默认 3
+    int deltaNum;    ///< 间隔文件数目；默认 120
+    int lastFileId;  ///< 最后一个文件编号；默认 6000
+    int rangeOffset; ///< 最近成像作用距离偏移值；默认 100
+    int fileNum;     ///< 文件个数（SAR 至少 2）；SAR 模板默认 50
+    int rangePoints; ///< 距离向点数；默认 8192
 
     ZeroImageParameters()
-        : beginId(30)
+        : beginId(3)
         , deltaNum(120)
         , lastFileId(6000)
         , rangeOffset(100)
-        , fileNum(16)
-        , testMode(0)
-        , aperLen(256)
-        , tarPosY(1711)
-        , iqOrderBand1(1)
-        , iqOrderBand2(1)
+        , fileNum(50)
         , rangePoints(8192)
-        , errEstStart(500)
-        , errEstLength(500)
     {
     }
 };
@@ -544,16 +533,31 @@ struct ZeroImageRequest {
     std::string outputBasePath;     ///< L0 输出基路径，如 .../source_L0.dat
     std::string inputDirectory;     ///< 已有 L0 目录。空则使用本次 L0 产物所在目录；图像写回该目录
     ZeroImageParameters parameters; ///< 成像参数；须与数据编号匹配
-    std::string engineDirectory;    ///< 引擎目录（含 run_*.sh）；空=自动查找
-    std::string engineExecutable;   ///< 引擎可执行文件或 run_*.sh；空=在引擎目录中查找
-    std::string mcrRoot;            ///< MATLAB Runtime v9.3 根目录；空=/usr/local/MATLAB/MATLAB_Runtime/v93
-    std::string mcrCacheRoot;       ///< MCR 缓存目录；空=沿用 ~/.mcrCache9.3
-    int timeoutMs;                  ///< 引擎超时（毫秒）；0=不限制
+    std::string engineDirectory;  ///< 后处理包根目录（含 bin/sarIsarPostProcess）；空=自动查找
+    std::string engineExecutable; ///< 可执行文件；空=使用包内 sarIsarPostProcess
+    int timeoutMs;                ///< 引擎超时（毫秒）；0=不限制
     bool requireEngine;             ///< false=只还原、不启动引擎
     bool keepWorkspace;             ///< true=保留内部工作目录（调试）
-    int kind;                       ///< 0=SAR（当前可用），1=ISAR（需另提供引擎）
+    int kind;                       ///< 0=SAR，1=ISAR
+    int roiX;                       ///< 目标中心列，0 起点；roiW<=0 时不传
+    int roiY;                       ///< 目标中心行，0 起点
+    int roiW;                       ///< 横向宽度点数；<=0 表示不指定框
+    int roiH;                       ///< 径向高度点数；<=0 时高默认等于宽
+    bool exportTxt;                 ///< true 时成像同时导出切片报表
+    std::string imageOutputDirectory; ///< 图像输出目录；空则写回 L0 目录
 
-    ZeroImageRequest() : timeoutMs(0), requireEngine(true), keepWorkspace(false), kind(0) {}
+    ZeroImageRequest()
+        : timeoutMs(0)
+        , requireEngine(true)
+        , keepWorkspace(false)
+        , kind(0)
+        , roiX(0)
+        , roiY(0)
+        , roiW(0)
+        , roiH(0)
+        , exportTxt(false)
+    {
+    }
 };
 
 /** 回写到输入目录的产物 */
@@ -617,16 +621,31 @@ struct ZeroImageFolderRequest {
     std::string sourceDirectory;    ///< 原始 DAT 所在目录（不进入子目录）
     std::string outputDirectory;    ///< 全部 L0 与 .sarrec 写入此目录，图像也写回此处
     ZeroImageParameters parameters; ///< 成像参数；须与还原出的 SAR_Raw 编号匹配
-    std::string engineDirectory;    ///< 引擎目录（含 run_*.sh）；空=自动查找
-    std::string engineExecutable;   ///< 引擎可执行文件或 run_*.sh；空=在引擎目录中查找
-    std::string mcrRoot;            ///< MATLAB Runtime v9.3 根目录；空=/usr/local/MATLAB/MATLAB_Runtime/v93
-    std::string mcrCacheRoot;       ///< MCR 缓存目录；空=沿用 ~/.mcrCache9.3
-    int timeoutMs;                  ///< 引擎超时（毫秒）；0=不限制
+    std::string engineDirectory;  ///< 后处理包根目录（含 bin/sarIsarPostProcess）；空=自动查找
+    std::string engineExecutable; ///< 可执行文件；空=使用包内 sarIsarPostProcess
+    int timeoutMs;                ///< 引擎超时（毫秒）；0=不限制
     bool requireEngine;             ///< false=只还原、不启动引擎
     bool keepWorkspace;             ///< true=保留内部工作目录（调试）
-    int kind;                       ///< 0=SAR（当前可用），1=ISAR（需另提供引擎）
+    int kind;                       ///< 0=SAR，1=ISAR
+    int roiX;
+    int roiY;
+    int roiW;
+    int roiH;
+    bool exportTxt;
+    std::string imageOutputDirectory; ///< 图像输出目录；空则写回 outputDirectory
 
-    ZeroImageFolderRequest() : timeoutMs(0), requireEngine(true), keepWorkspace(false), kind(0) {}
+    ZeroImageFolderRequest()
+        : timeoutMs(0)
+        , requireEngine(true)
+        , keepWorkspace(false)
+        , kind(0)
+        , roiX(0)
+        , roiY(0)
+        , roiW(0)
+        , roiH(0)
+        , exportTxt(false)
+    {
+    }
 };
 
 /** processZeroImageFolder 输出：每个源文件的 L0，以及一次成像的产物 */
@@ -642,6 +661,28 @@ struct ZeroImageFolderResponse {
     std::string configPath;
     std::string logPath;
     ZeroImageFolderResponse() : exitCode(-1), restoredBytes(0) {}
+};
+
+/** 对已有 .cplx（或同名 .tif/.raw）按框导出切片报表，不重新成像。 */
+struct SliceTxtRequest {
+    std::string imagePath;
+    int roiX;
+    int roiY;
+    int roiW; ///< <=0 时由程序在图像中心附近找最强点
+    int roiH; ///< <=0 时高默认等于宽
+    std::string outPath;
+    std::string taskName;
+    std::string taskLeader;
+    std::string targetName;
+    std::string engineDirectory;
+    int timeoutMs;
+    SliceTxtRequest() : roiX(0), roiY(0), roiW(0), roiH(0), timeoutMs(0) {}
+};
+
+struct SliceTxtResponse {
+    std::string txtPath;
+    int exitCode;
+    SliceTxtResponse() : exitCode(-1) {}
 };
 #endif // RCS_ENABLE_TOZERODATA
 

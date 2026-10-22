@@ -59,53 +59,47 @@ target_include_directories(rcs_proc
 target_link_libraries(rcs_proc PRIVATE TIFF::TIFF)
 
 if(RCS_ENABLE_TOZERODATA)
-  set(ZDI_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/zerodataimagehandle")
-  set(ZDI_A "${ZDI_ROOT}/lib/libZeroDataImageHandleCpp11.a")
-  set(ZDI_ENGINE "${ZDI_ROOT}/engine/for_testing")
-  if(NOT EXISTS "${ZDI_A}")
-    message(FATAL_ERROR
-      "RCS_ENABLE_TOZERODATA=ON 但缺少静态库: ${ZDI_A}\n"
-      "请放入 libZeroDataImageHandleCpp11.a / zerodataimagehandle.h，或关掉: -DRCS_ENABLE_TOZERODATA=OFF")
-  endif()
-  if(NOT EXISTS "${ZDI_ROOT}/include/zerodataimagehandle.h")
-    message(FATAL_ERROR "缺少 ${ZDI_ROOT}/include/zerodataimagehandle.h")
-  endif()
-
   set(TOZERODATA_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/tozerodata")
-  set(TOZERODATA_A "${TOZERODATA_ROOT}/lib/libToZeroDataCpp11.a")
-  if(NOT EXISTS "${TOZERODATA_A}")
-    message(FATAL_ERROR "缺少源 DAT 转 L0 静态库: ${TOZERODATA_A}")
+  set(TOZERODATA_SO "${TOZERODATA_ROOT}/lib/libToZeroDataCpp11.so")
+  if(NOT EXISTS "${TOZERODATA_SO}")
+    message(FATAL_ERROR "缺少源 DAT 转 L0 动态库: ${TOZERODATA_SO}")
   endif()
   if(NOT EXISTS "${TOZERODATA_ROOT}/include/tozerodata.h")
     message(FATAL_ERROR "缺少 ${TOZERODATA_ROOT}/include/tozerodata.h")
   endif()
 
-  add_library(ToZeroDataCpp11 STATIC IMPORTED GLOBAL)
+  set(POST_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/sar_isar_post")
+  if(NOT EXISTS "${POST_ROOT}/bin/sarIsarPostProcess")
+    message(FATAL_ERROR "缺少成像后处理程序: ${POST_ROOT}/bin/sarIsarPostProcess")
+  endif()
+
+  add_library(ToZeroDataCpp11 SHARED IMPORTED GLOBAL)
   set_target_properties(ToZeroDataCpp11 PROPERTIES
-    IMPORTED_LOCATION "${TOZERODATA_A}"
+    IMPORTED_LOCATION "${TOZERODATA_SO}"
+    IMPORTED_NO_SONAME TRUE
     INTERFACE_INCLUDE_DIRECTORIES "${TOZERODATA_ROOT}/include"
-  )
-  add_library(ZeroDataImageHandleCpp11 STATIC IMPORTED GLOBAL)
-  set_target_properties(ZeroDataImageHandleCpp11 PROPERTIES
-    IMPORTED_LOCATION "${ZDI_A}"
-    INTERFACE_INCLUDE_DIRECTORIES "${ZDI_ROOT}/include"
   )
 
   target_include_directories(rcs_proc PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tozerodata
     ${TOZERODATA_ROOT}/include
-    ${ZDI_ROOT}/include
   )
-  # --whole-archive：转换库与成像库都打进 librcs_proc.so；客户只链 -lrcs_proc
-  target_link_libraries(rcs_proc PRIVATE
-    -Wl,--whole-archive ToZeroDataCpp11 ZeroDataImageHandleCpp11 -Wl,--no-whole-archive
-    ${CMAKE_DL_LIBS})
+  # 客户仍只链 -lrcs_proc；libToZeroDataCpp11.so 放在同一目录，由 $ORIGIN 找到
+  target_link_libraries(rcs_proc PRIVATE ToZeroDataCpp11 ${CMAKE_DL_LIBS})
+  set_target_properties(rcs_proc PROPERTIES
+    BUILD_RPATH "\$ORIGIN"
+    INSTALL_RPATH "\$ORIGIN"
+  )
+  add_custom_command(TARGET rcs_proc POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TOZERODATA_SO}" "$<TARGET_FILE_DIR:rcs_proc>/libToZeroDataCpp11.so"
+    COMMENT "copy libToZeroDataCpp11.so next to librcs_proc")
   target_compile_definitions(rcs_proc PUBLIC RCS_ENABLE_TOZERODATA=1)
-  target_compile_definitions(rcs_proc PRIVATE "RCS_ZDI_ENGINE_DIR=\"${ZDI_ENGINE}\"")
-  message(STATUS "ZeroDataImageHandle: ON (static link ${ZDI_A})")
-  message(STATUS "ZeroDataImageHandle engine: ${ZDI_ENGINE}")
+  target_compile_definitions(rcs_proc PRIVATE "RCS_POST_ROOT=\"${POST_ROOT}\"")
+  message(STATUS "ToZeroData: shared ${TOZERODATA_SO}")
+  message(STATUS "SAR/ISAR post: ${POST_ROOT}")
 else()
-  message(STATUS "ZeroDataImageHandle: OFF")
+  message(STATUS "ToZeroData: OFF")
 endif()
 
 if(UNIX AND NOT APPLE)

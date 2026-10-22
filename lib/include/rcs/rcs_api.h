@@ -80,7 +80,7 @@ RCS_API bool processSigma0(const Sigma0Request &req, Sigma0Response &resp, Callb
 
 // ---------------------------------------------------------------------------
 // [9] RCS 像辐射定标（HXSSXS_207_cal_tif）
-// 角反缓冲区 → K；批量固定写出 *_RCS_dBsm.tif 与三级 .txt
+// 角反缓冲区 → K；批量固定写出 *_RCS_dBsm.tif、三级 .txt 与同名二级 .pdat
 // 回调：doCalib 且 autoPick=false 时 onRectRoi(stage="cal")
 // ---------------------------------------------------------------------------
 
@@ -194,9 +194,9 @@ RCS_API bool prepareMosaicInputs(const std::string &inFolder, const std::string 
 
 #if defined(RCS_ENABLE_TOZERODATA) && RCS_ENABLE_TOZERODATA
 // ---------------------------------------------------------------------------
-// [10] 源 DAT → 四极化 L0 → 成像（两步都静态合入主库，一次调用完成）
+// [10] 源 DAT → 四极化 L0 → 成像（一次调用完成；客户只链 -lrcs_proc）
 // 回调：onProgress / onMessage / isCancelled（建议）
-// 运行前提：MATLAB Runtime v9.3，以及随包 engine/for_testing
+// 后处理为 sarIsarPostProcess，程序在 engine/bin，自带运行库，不需要 MATLAB。
 // ---------------------------------------------------------------------------
 
 /** 仅把源 DAT 转为 HH/VV/HV/VH。saveRecovery=true 时写 .sarrec。 */
@@ -229,6 +229,10 @@ RCS_API std::string zeroImageSidecarPath(const std::string &polarizedPath);
  */
 RCS_API bool processZeroImageFolder(const ZeroImageFolderRequest &req, ZeroImageFolderResponse &resp,
                                     Callbacks &cb, std::string *err = 0);
+
+/** 对已有图像的 .cplx 按框导出切片报表。imagePath 也可传同名 .tif/.raw。 */
+RCS_API bool exportSliceTxt(const SliceTxtRequest &req, SliceTxtResponse &resp, Callbacks &cb,
+                            std::string *err = 0);
 #endif // RCS_ENABLE_TOZERODATA
 
 #endif

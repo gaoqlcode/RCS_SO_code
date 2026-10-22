@@ -156,3 +156,64 @@ bool Level2Pdat::save1D(const std::string &outPath, const std::vector<double> &r
         *err = "写入失败: " + outPath;
     return ok;
 }
+
+bool Level2Pdat::saveCalDbsm(const std::string &outPath, const std::vector<uint8_t> &fileHeader,
+                             const std::vector<uint8_t> &frame0, int nr, int na,
+                             const std::vector<float> &dbsm, double RcalM, double sigmaDb,
+                             int rcsScale, std::string *err)
+{
+    if (nr <= 0 || na <= 0 || dbsm.size() < static_cast<size_t>(nr) * static_cast<size_t>(na)) {
+        if (err)
+            *err = "二级数据尺寸无效";
+        return false;
+    }
+    if (fileHeader.size() < 512 || frame0.size() < 256) {
+        if (err)
+            *err = "0 级文件头不足 512+256 字节";
+        return false;
+    }
+
+    FILE *f = fopenUtf8(outPath, "wb");
+    if (!f) {
+        if (err)
+            *err = "无法创建: " + outPath;
+        return false;
+    }
+
+    std::vector<uint8_t> ohdr(fileHeader.begin(), fileHeader.begin() + 512);
+    patchCalHeader(ohdr, RcalM, sigmaDb, rcsScale);
+    if (!writeBytes(f, ohdr.data(), 512)) {
+        fclose(f);
+        if (err)
+            *err = "写入失败: " + outPath;
+        return false;
+    }
+
+    std::vector<uint8_t> fh(256, 0);
+    std::vector<uint8_t> buf(static_cast<size_t>(nr) * 6);
+    for (int c = 0; c < na; ++c) {
+        std::memcpy(fh.data(), frame0.data(), 256);
+        writeU32LE(fh.data() + 8, static_cast<uint32_t>(c));
+        writeU32LE(fh.data() + 16, static_cast<uint32_t>(nr));
+        if (!writeBytes(f, fh.data(), 256)) {
+            fclose(f);
+            if (err)
+                *err = "写入失败: " + outPath;
+            return false;
+        }
+        uint8_t *b = buf.data();
+        for (int r = 0; r < nr; ++r) {
+            const float db = dbsm[static_cast<size_t>(r) * static_cast<size_t>(na) + static_cast<size_t>(c)];
+            writeF32LE(b + r * 6, db);
+            writeU16LE(b + r * 6 + 4, 0);
+        }
+        if (!writeBytes(f, buf.data(), buf.size())) {
+            fclose(f);
+            if (err)
+                *err = "写入失败: " + outPath;
+            return false;
+        }
+    }
+    fclose(f);
+    return true;
+}
